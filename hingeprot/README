@@ -1,0 +1,38 @@
+-- README FILE FOR HINGEPROT'S STANDALONE VERSION
+
+HingeProt: An Algorithm For Protein Hinge Prediction Using Elastic Network Models
+
+In this readme file, you will find the instructions to run the standalone version
+of HingeProt, and the explanations of the outputs.
+
+The program does not require installation, it comes as a package,
+consisting of 5 executable programs and one perl script that runs them
+in order.  In order for your system to run the program correctly, you
+will need perl installed on your computer, along with The BLAS (Basic
+Linear Algebra Subprograms) shared library.
+
+To run the program, call runHingeProt.pl, along with the name of the
+pdb file and the chain id for the file:
+
+==> runHingeProt.pl 4cln.pdb A
+
+The script will create a directory named "4cln.pdb.A", and under this
+directory there will be 4 different output files, which are as the following:
+
+- pdbcode.new.hinges: the main output file. gives the rigid parts, and
+the hinge residues for the slowest modes 1 and 2, seperately.
+
+- pdbcode.mode1.pdb: the output of the motion in the first slowest
+  mode. 11 different models represent different motion extents, 6
+  being the initial pdb file supplied. Coloring by temperature will
+  show the rigid parts and hinges.
+
+- pdbcode.mode2.pdb: same as above, for the second slowest mode.
+
+- pdbcode.new.loops: includes a list of flexible loops identified by
+  the first two modes.
+
+If you use this program, please cite: Emekli U, Schneidman-Duhovny D,
+Wolfson HJ, Nussinov R, Haliloglu T. (2008) HingeProt: Automated
+Prediction of Hinges in Protein Structures. Proteins, 70(4):1219-27.
+
