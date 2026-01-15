@@ -37,7 +37,3 @@ rename("newcoordinat.mds", "$pdbCode.new");
 
 rename("$pdbCode.new.moved1.pdb", "$pdbCode.mode1.pdb");
 rename("$pdbCode.new.moved2.pdb", "$pdbCode.mode2.pdb");
-
-my @filelist = ("coordinates","upperhessian", "sortedeigen", "sloweigenvectors", "anm_length", "alpha.cor", "mapping.out", "pdb", "$pdbCode.hinge", "$pdbCode.new");
-unlink @filelist;
-unlink <*.mds12>; unlink <cross*>; unlink <*coor>; unlink <*cross>; unlink <*anm.pdb>; unlink <mod*>; unlink <newcoor*>; unlink <slow*>; unlink <*vector>; unlink <*.new>; unlink <.*>; unlink <fort*>;
