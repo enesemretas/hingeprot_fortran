@@ -1,4 +1,3 @@
-cat > /content/hingeprot_fortran/hingeprot/ui.py <<'PY'
 from __future__ import annotations
 
 import os
