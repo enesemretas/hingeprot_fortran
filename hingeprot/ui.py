@@ -238,7 +238,19 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 raise RuntimeError("py3Dmol install failed. Try: !pip -q install py3Dmol")
             import py3Dmol  # type: ignore
             return py3Dmol
-
+            
+    def _html_with_unique_divid(raw_html: str) -> str:
+        """
+        py3Dmol'un ürettiği HTML içindeki ilk div id'sini bulup
+        tüm referanslarda benzersiz bir id ile değiştirir.
+        """
+        m = re.search(r'id="([^"]+)"', raw_html)
+        if not m:
+            return raw_html
+        old = m.group(1)
+        new = f"hp3d_{uuid.uuid4().hex}"
+        return raw_html.replace(old, new)
+        
     # ---------- UI ----------
     css = W.HTML(r"""
     <style>
@@ -431,7 +443,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         else:
             selected = []
 
-        v = py3Dmol.view(width=560, height=360, divid=f"hp3d_{uuid.uuid4().hex}")
+        v = py3Dmol.view(width=560, height=360)
         v.addModel(pdb_text, "pdb")
         v.setBackgroundColor("white")
 
@@ -444,9 +456,13 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
         v.zoomTo()
 
+        raw = v._make_html()
+        raw = _html_with_unique_divid(raw)
+
         with viewer_out:
             clear_output(wait=True)
-            display(HTML(v._make_html()))
+            display(HTML(raw))
+
 
     # ---------- input visibility ----------
     def _sync_input_visibility(*_):
