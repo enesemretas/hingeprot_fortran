@@ -5,10 +5,8 @@ import re
 import datetime
 import base64
 import uuid
-import json
 import shutil
 import subprocess
-from pathlib import Path
 
 import requests
 import ipywidgets as W
@@ -28,6 +26,7 @@ def get_last_inputs() -> dict | None:
 def _sh(cmd: str, cwd: str | None = None, timeout: int | None = None) -> subprocess.CompletedProcess:
     """
     Run a bash command (Colab-friendly). Never raises; caller inspects returncode.
+    stdout/stderr are captured (so notebook doesn't spam output).
     """
     return subprocess.run(
         ["bash", "-lc", cmd],
@@ -36,10 +35,6 @@ def _sh(cmd: str, cwd: str | None = None, timeout: int | None = None) -> subproc
         text=True,
         timeout=timeout,
     )
-
-
-def _which(tool: str) -> bool:
-    return _sh(f"command -v {tool} >/dev/null 2>&1").returncode == 0
 
 
 def _ldconfig_has_libg2c() -> bool:
@@ -52,14 +47,13 @@ def _ensure_libg2c(log: callable) -> None:
     Install libg2c.so.0 runtime (amd64) if missing.
     """
     if _ldconfig_has_libg2c():
-        log("libg2c.so.0 already available (ldconfig).")
         return
 
     log("Installing libg2c.so.0 runtime (amd64) ...")
+
     os.makedirs("/content", exist_ok=True)
     os.chdir("/content")
 
-    # download
     deb1 = "gcc-3.4-base_3.4.6-6ubuntu3_amd64.deb"
     deb2 = "libg2c0_3.4.6-6ubuntu3_amd64.deb"
     url1 = f"https://old-releases.ubuntu.com/ubuntu/pool/universe/g/gcc-3.4/{deb1}"
@@ -68,27 +62,22 @@ def _ensure_libg2c(log: callable) -> None:
     r = _sh(f"wget -q {url1} -O {deb1}")
     if r.returncode != 0:
         raise RuntimeError(f"wget failed for {url1}\n{r.stderr}")
+
     r = _sh(f"wget -q {url2} -O {deb2}")
     if r.returncode != 0:
         raise RuntimeError(f"wget failed for {url2}\n{r.stderr}")
 
-    # install debs (allow fail) then fix deps
-    r = _sh(f"dpkg -i {deb1} {deb2} || true")
-    if r.stdout.strip():
-        log(r.stdout.strip())
-    if r.stderr.strip():
-        log(r.stderr.strip())
-
+    _sh(f"dpkg -i {deb1} {deb2} || true")
     r = _sh("apt-get -y -qq -f install")
     if r.returncode != 0:
         raise RuntimeError(f"apt-get -f install failed:\n{r.stderr}")
 
     _sh("ldconfig")
 
-    # verify
     if not _ldconfig_has_libg2c():
         raise RuntimeError("libg2c.so.0 still not found after installation.")
-    log("✅ libg2c.so.0 installed and visible to ldconfig.")
+
+    log("✅ libg2c.so.0 ready.")
 
 
 def _ensure_repo(log: callable, fresh: bool = False) -> str:
@@ -100,7 +89,6 @@ def _ensure_repo(log: callable, fresh: bool = False) -> str:
     hp = os.path.join(root, "hingeprot")
     url = "https://github.com/enesemretas/hingeprot_fortran.git"
 
-    # Safety: do not delete if we're currently running from inside that tree
     here = os.path.abspath(__file__)
     running_inside = here.startswith(os.path.abspath(root) + os.sep)
 
@@ -108,41 +96,28 @@ def _ensure_repo(log: callable, fresh: bool = False) -> str:
         if running_inside:
             log("⚠️ Fresh clone requested but ui.py is running inside hingeprot_fortran; skipping rm -rf for safety.")
         else:
-            log("Fresh clone: removing existing /content/hingeprot_fortran ...")
             shutil.rmtree(root, ignore_errors=True)
 
     if not os.path.isdir(hp):
-        log("Cloning hingeprot_fortran repository ...")
+        log("Cloning hingeprot_fortran ...")
         os.makedirs("/content", exist_ok=True)
         os.chdir("/content")
-        r = _sh(f"git clone {url}")
+        r = _sh(f"git clone -q {url}")
         if r.returncode != 0:
             raise RuntimeError(f"git clone failed:\n{r.stderr}")
-    else:
-        log("Repository already present: /content/hingeprot_fortran")
 
-    # sanity
     if not os.path.isdir(hp):
         raise RuntimeError("Repo clone seems incomplete: missing /content/hingeprot_fortran/hingeprot")
-
-    # show pwd/ls as requested (into log)
-    r = _sh("pwd", cwd=hp)
-    log(f"pwd: {r.stdout.strip()}")
-    r = _sh("ls -lah", cwd=hp)
-    log("ls -lah:\n" + (r.stdout.strip() or ""))
 
     return hp
 
 
-def _write_runHingeProt_pl(hingeprot_dir: str, gnm_cut: float, anm_cut: float, log: callable) -> str:
+def _write_runHingeProt_pl(hingeprot_dir: str, gnm_cut: float, anm_cut: float) -> str:
     """
     Create runHingeProt.pl with user-provided cutoffs.
-    Note: part1 typically expects numeric; we pass rounded ints for stability.
     """
     gnm_i = int(round(float(gnm_cut)))
     anm_i = int(round(float(anm_cut)))
-    if abs(gnm_i - float(gnm_cut)) > 1e-6 or abs(anm_i - float(anm_cut)) > 1e-6:
-        log(f"NOTE: Cutoffs rounded to integers for part1: GNM {gnm_cut}→{gnm_i}, ANM {anm_cut}→{anm_i}")
 
     pl_path = os.path.join(hingeprot_dir, "runHingeProt.pl")
     content = f"""#!/usr/bin/perl -w
@@ -186,21 +161,48 @@ rename("$pdbCode.new.moved2.pdb", "$pdbCode.mode2.pdb");
     with open(pl_path, "w", encoding="utf-8") as f:
         f.write(content)
 
-    # perms
     _sh("chmod +x ./runHingeProt.pl || true", cwd=hingeprot_dir)
     _sh("find . -maxdepth 1 -type f -exec chmod +x {} \\; || true", cwd=hingeprot_dir)
-
-    log(f"✅ runHingeProt.pl written at: {pl_path}")
     return pl_path
 
 
+def _read_text_file(path: str, max_lines: int = 800) -> str:
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.read().splitlines()
+    if len(lines) > max_lines:
+        head = lines[: max_lines // 2]
+        tail = lines[-max_lines // 2 :]
+        lines = head + ["", "[... truncated ...]", ""] + tail
+    return "\n".join(lines)
+
+
+def _find_hinges_file(out_dir: str, pdb_filename: str) -> str | None:
+    """
+    Prefer exactly: PDB_ID.pdb.new.hinges
+    Then fallback candidates.
+    """
+    candidates = [
+        os.path.join(out_dir, f"{pdb_filename}.new.hinges"),  # requested
+        os.path.join(out_dir, f"{pdb_filename}.new.hinge"),
+        os.path.join(out_dir, f"{pdb_filename}.hinges"),
+        os.path.join(out_dir, f"{pdb_filename}.hinge"),
+        os.path.join(out_dir, "hinges"),
+        os.path.join(out_dir, "hinge"),
+    ]
+    for p in candidates:
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            return p
+    return None
+
+
 # ----------------------------- UI -----------------------------
-def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
+def launch(runs_root: str = "/content/hingeprot_runs"):
     """
     Colab UI:
       - Collect PDB (code or upload), detect chains, collect cutoffs
-      - Save Inputs -> LAST_INPUTS
       - Run HingeProt (Fortran) -> installs libs, ensures repo, writes runHingeProt.pl, runs perl
+      - Moves outputs to run folder named with PDB ID
+      - Displays content of PDB_ID.pdb.new.hinges (or fallback)
     """
     from google.colab import output  # colab-only
     output.enable_custom_widget_manager()
@@ -351,8 +353,7 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
     anm_row, get_anm_cut = _list_or_custom_float("ANM cutoff (Å):", [10, 13, 15, 18, 20, 23, 36], 18.0, 1.0, 100.0)
 
     progress = W.IntProgress(value=0, min=0, max=4, description="Progress:", bar_style="")
-    btn_save = W.Button(description="Save Inputs", button_style="success", icon="save", layout=W.Layout(width="200px"))
-    btn_run_fortran = W.Button(description="Run HingeProt (Fortran)", button_style="primary", icon="play", layout=W.Layout(width="280px"))
+    btn_run_fortran = W.Button(description="Run HingeProt (Fortran)", button_style="primary", icon="play", layout=W.Layout(width="320px"))
     btn_clear = W.Button(description="Clear", button_style="warning", icon="trash", layout=W.Layout(width="180px"))
 
     status_box = W.HTML('<div class="hp-pre">Load a PDB to detect chains.</div>')
@@ -363,7 +364,7 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
     # ---------- state ----------
     state = {
         "pdb_text": None,
-        "pdb_filename": None,   # e.g. 3lzg.pdb
+        "pdb_filename": None,
         "pdb_path": None,
         "run_dir": None,
         "pdb_tag": None,
@@ -373,7 +374,6 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
         "chain_cbs": {},
         "manual_selection": (),
         "_syncing": False,
-        "inputs": None,
         "hingeprot_dir": None,
         "last_out_dir": None,
     }
@@ -519,36 +519,22 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
 
     all_chains.observe(_on_all_chains_toggle, names="value")
 
-    # ---------- logger ----------
-    def log(msg: str):
-        # append to status box
-        current = re.sub(r"<[^>]*>", "", status_box.value)  # strip tags roughly
-        if "Load a PDB" in current:
-            current = ""
-        text = (current.strip() + "\n" + msg).strip()
-        _set_status(text[-8000:])  # cap
-
     # ---------- actions ----------
     def on_load_clicked(_):
         progress.value = 0
         progress.bar_style = "info"
-        state["inputs"] = None
         state["last_out_dir"] = None
 
         try:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            run_dir = os.path.join(runs_root, f"run_{ts}")
-            os.makedirs(run_dir, exist_ok=True)
-            state["run_dir"] = run_dir
 
-            # Determine PDB text + filename/tag
+            # Determine PDB text + filename/tag FIRST
             if input_mode.value == "upload":
                 if state["upload_bytes"] is None:
                     raise ValueError("Please click 'Choose file' and upload a PDB first.")
                 pdb_text = state["upload_bytes"].decode("utf-8", errors="ignore")
 
                 upname = (state.get("upload_name") or "upload.pdb").strip()
-                # keep extension if present
                 if not re.search(r"\.(pdb|ent)$", upname, flags=re.I):
                     upname = upname + ".pdb"
                 pdb_filename = os.path.basename(upname)
@@ -564,11 +550,16 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
                 pdb_filename = f"{code4.lower()}.pdb"
                 tag = code4
 
+            # Create run dir that starts with PDB ID
+            run_dir = os.path.join(runs_root, f"{tag}_run_{ts}")
+            os.makedirs(run_dir, exist_ok=True)
+
+            state["run_dir"] = run_dir
             state["pdb_text"] = pdb_text
             state["pdb_filename"] = pdb_filename
             state["pdb_tag"] = tag
 
-            # Save a copy to disk (runs_root)
+            # Save pdb into run_dir
             pdb_path = os.path.join(run_dir, pdb_filename)
             with open(pdb_path, "w", encoding="utf-8") as f:
                 f.write(pdb_text)
@@ -592,10 +583,10 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
 
             progress.value = 1
             _set_status(
-                f"Loaded PDB (tag={tag})\n"
-                f"Saved (runs_root): {pdb_path}\n"
+                f"Loaded PDB (ID={tag})\n"
+                f"Run folder: {run_dir}\n"
                 f"Detected chains: {', '.join(chs)}\n\n"
-                "Now select chains, set cutoffs, then click 'Save Inputs' or directly 'Run HingeProt (Fortran)'."
+                "Now select chains, set cutoffs, then click 'Run HingeProt (Fortran)'."
             )
 
         except Exception as e:
@@ -620,8 +611,6 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
         captured = {
             "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
             "input_mode": input_mode.value,
-            "pdb_code": pdb_code.value.strip() if input_mode.value == "code" else None,
-            "upload_name": state.get("upload_name") if input_mode.value == "upload" else None,
             "pdb_tag": state.get("pdb_tag"),
             "pdb_filename": state.get("pdb_filename"),
             "pdb_path_runsroot": state.get("pdb_path"),
@@ -635,99 +624,76 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
         }
         return captured
 
-    def on_save_clicked(_):
-        try:
-            captured = _capture_inputs()
-            state["inputs"] = captured
-            global LAST_INPUTS
-            LAST_INPUTS = captured
-
-            if save_json and captured.get("run_dir_runsroot"):
-                outp = os.path.join(captured["run_dir_runsroot"], "inputs.json")
-                with open(outp, "w", encoding="utf-8") as f:
-                    json.dump(captured, f, ensure_ascii=False, indent=2)
-
-            progress.value = max(progress.value, 2)
-            progress.bar_style = "success"
-            _set_status(
-                "✅ Inputs captured (LAST_INPUTS)\n\n"
-                f"pdb_filename   : {captured['pdb_filename']}\n"
-                f"chains         : {captured['chains_str']}\n"
-                f"GNM cutoff (Å) : {captured['gnm_cutoff_A']}\n"
-                f"ANM cutoff (Å) : {captured['anm_cutoff_A']}\n\n"
-                "Next: 'Run HingeProt (Fortran)'"
-            )
-        except Exception as e:
-            progress.bar_style = "danger"
-            _set_status(f"ERROR: {e}")
-
     def on_run_fortran_clicked(_):
         progress.bar_style = "info"
         try:
             captured = _capture_inputs()
-            state["inputs"] = captured
             global LAST_INPUTS
             LAST_INPUTS = captured
 
-            log("=== Step 1/4: Ensure libg2c.so.0 ===")
             progress.value = 1
-            _ensure_libg2c(log)
+            _ensure_libg2c(lambda _msg: None)  # keep quiet (UI will show final hinges anyway)
 
-            log("\n=== Step 2/4: Ensure repo ===")
             progress.value = 2
-            hp_dir = _ensure_repo(log, fresh=False)
+            hp_dir = _ensure_repo(lambda _msg: None, fresh=False)
             state["hingeprot_dir"] = hp_dir
 
-            log("\n=== Step 3/4: Write runHingeProt.pl (with UI cutoffs) ===")
             progress.value = 3
-            _write_runHingeProt_pl(hp_dir, captured["gnm_cutoff_A"], captured["anm_cutoff_A"], log)
+            _write_runHingeProt_pl(hp_dir, captured["gnm_cutoff_A"], captured["anm_cutoff_A"])
 
-            # Place pdb file in hingeprot dir with expected filename
+            # Put pdb in hingeprot dir with expected filename
             pdb_filename = captured["pdb_filename"]
             pdb_abs = os.path.join(hp_dir, pdb_filename)
             with open(pdb_abs, "w", encoding="utf-8") as f:
                 f.write(state["pdb_text"] or "")
 
-            log(f"✅ PDB written to: {pdb_abs}")
-
-            # Execute like:
-            #   perl ./runHingeProt.pl 3lzg.pdb AB
             chains_str = captured["chains_str"]
-            out_dir = os.path.join(hp_dir, f"{pdb_filename}.{chains_str}")
+            out_dir_repo = os.path.join(hp_dir, f"{pdb_filename}.{chains_str}")
 
-            # optional: remove previous output dir to avoid mixing
-            if os.path.isdir(out_dir):
-                shutil.rmtree(out_dir, ignore_errors=True)
+            # Clean previous
+            if os.path.isdir(out_dir_repo):
+                shutil.rmtree(out_dir_repo, ignore_errors=True)
 
-            log("\n=== Step 4/4: Run perl ./runHingeProt.pl ... ===")
+            # Run perl
             cmd = f"perl ./runHingeProt.pl {pdb_filename} {chains_str}"
             r = _sh(cmd, cwd=hp_dir)
-            if r.stdout.strip():
-                log("STDOUT:\n" + r.stdout.strip())
-            if r.stderr.strip():
-                log("STDERR:\n" + r.stderr.strip())
             if r.returncode != 0:
-                raise RuntimeError(f"runHingeProt.pl failed (return code {r.returncode}).")
+                raise RuntimeError(f"runHingeProt.pl failed (return code {r.returncode}).\n{r.stderr}")
 
-            state["last_out_dir"] = out_dir
+            # Move outputs into run folder
+            run_dir = captured["run_dir_runsroot"]
+            if not run_dir or not os.path.isdir(run_dir):
+                raise RuntimeError("Run folder not found. Please 'Load / Detect Chains' again.")
 
-            # Show directory listing (like your !ls -lah / !ls -lah outdir)
-            r = _sh("ls -lah", cwd=hp_dir)
-            log("\nls -lah (hingeprot dir):\n" + (r.stdout.strip() or ""))
-
-            if os.path.isdir(out_dir):
-                r2 = _sh(f"ls -lah {shlex_quote(os.path.basename(out_dir))}", cwd=hp_dir)
-                log(f"\nls -lah {os.path.basename(out_dir)}:\n" + (r2.stdout.strip() or ""))
+            dest_out_dir = os.path.join(run_dir, os.path.basename(out_dir_repo))
+            if os.path.isdir(dest_out_dir):
+                shutil.rmtree(dest_out_dir, ignore_errors=True)
+            if os.path.isdir(out_dir_repo):
+                shutil.move(out_dir_repo, dest_out_dir)
             else:
-                log(f"\nWARNING: expected output dir not found: {out_dir}")
+                # Sometimes tool may create output elsewhere; but normally this exists
+                raise RuntimeError(f"Expected output folder not found: {out_dir_repo}")
+
+            state["last_out_dir"] = dest_out_dir
+
+            # Print hinges content on result screen
+            hinges_fp = _find_hinges_file(dest_out_dir, pdb_filename)
+            if hinges_fp:
+                txt = _read_text_file(hinges_fp, max_lines=900)
+                _set_status(txt)
+            else:
+                _set_status(
+                    "Run completed, but hinges file not found.\n"
+                    f"Expected: {pdb_filename}.new.hinges (or fallback)\n"
+                    f"Output folder: {dest_out_dir}"
+                )
 
             progress.value = 4
             progress.bar_style = "success"
-            log("\n✅ Done.")
 
         except Exception as e:
             progress.bar_style = "danger"
-            log(f"\nERROR: {e}")
+            _set_status(f"ERROR: {e}")
 
     def on_clear_clicked(_):
         pdb_code.value = ""
@@ -751,7 +717,6 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
         all_chains.value = False
         chains_wrap.children = ()
 
-        state["inputs"] = None
         global LAST_INPUTS
         LAST_INPUTS = None
 
@@ -760,12 +725,7 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
         progress.bar_style = ""
         _set_status("Cleared. Load a PDB to detect chains.")
 
-    # small helper for safe ls on relative outdir
-    def shlex_quote(s: str) -> str:
-        return "'" + s.replace("'", "'\"'\"'") + "'"
-
     btn_load.on_click(on_load_clicked)
-    btn_save.on_click(on_save_clicked)
     btn_run_fortran.on_click(on_run_fortran_clicked)
     btn_clear.on_click(on_clear_clicked)
 
@@ -779,12 +739,12 @@ def launch(runs_root: str = "/content/hingeprot_runs", save_json: bool = False):
         chain_row,
         W.VBox([gnm_row, anm_row], layout=W.Layout(gap="8px")),
         progress,
-        W.HBox([btn_save, btn_run_fortran, btn_clear]),
+        W.HBox([btn_run_fortran, btn_clear]),
         W.HTML("</div>"),
     ])
 
     output_card = W.VBox([
-        W.HTML('<div class="hp-card"><b>Status / Logs</b></div>'),
+        W.HTML('<div class="hp-card"><b>Hinges Output</b></div>'),
         status_box,
     ])
 
