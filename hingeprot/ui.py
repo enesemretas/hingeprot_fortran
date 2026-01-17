@@ -407,6 +407,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 _set_status("Upload callback received empty data.")
                 return
             data = base64.b64decode(data_b64.encode("utf-8"))
+            upload_prog.value = 100
+            upload_prog.bar_style = "success"
+
             state["upload_name"] = name
             state["upload_bytes"] = data
             file_lbl.value = name
@@ -416,7 +419,24 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
     output.register_callback(cb_name, _js_upload_callback)
 
+    cb_prog = f"hingeprot_uploadprog_{uuid.uuid4().hex}"
+
+    def _js_upload_progress_callback(payload):
+        try:
+            pct = int(payload.get("pct", 0))
+            pct = max(0, min(100, pct))
+            upload_prog.bar_style = "info" if pct < 100 else "success"
+            upload_prog.value = pct
+        except Exception:
+            pass
+
+    output.register_callback(cb_prog, _js_upload_progress_callback)
+
     def on_choose_file(_):
+        # reset progress immediately
+        upload_prog.value = 0
+        upload_prog.bar_style = "info"
+
         js = f"""
         (async () => {{
           const input = document.createElement('input');
@@ -431,6 +451,33 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             if (!file) return;
 
             const reader = new FileReader();
+
+            // progress updates
+            reader.onprogress = async (e) => {{
+              try {{
+                if (e.lengthComputable) {{
+                  const pct = Math.round((e.loaded / e.total) * 100);
+                  await google.colab.kernel.invokeFunction(
+                    "{cb_prog}",
+                    [{{pct: pct}}],
+                    {{}}
+                  );
+                }}
+              }} catch (err) {{}}
+            }};
+    
+            reader.onloadstart = async () => {{
+              try {{
+                await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: 0}}], {{}});
+              }} catch (err) {{}}
+            }};
+
+            reader.onloadend = async () => {{
+              try {{
+                await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: 100}}], {{}});
+              }} catch (err) {{}}
+            }};
+
             reader.onload = async () => {{
               const b64 = (reader.result || "").split(",")[1] || "";
               await google.colab.kernel.invokeFunction(
@@ -439,13 +486,15 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 {{}}
               );
             }};
+    
             reader.readAsDataURL(file);
           }};
-
+    
           input.click();
         }})();
         """
         output.eval_js(js)
+
 
     btn_choose_file.on_click(on_choose_file)
 
