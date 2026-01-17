@@ -753,6 +753,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         input_mode.value = "code"
         state["upload_name"] = None
         state["upload_bytes"] = None
+        upload_prog.value = 0
+        upload_prog.bar_style = ""
         file_lbl.value = "No file chosen"
 
         state["pdb_text"] = None
