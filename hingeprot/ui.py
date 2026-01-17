@@ -749,4 +749,4 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     ])
 
     display(css, header, form_card, output_card)
-    return state
+    return None
