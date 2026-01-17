@@ -14,7 +14,6 @@ import ipywidgets as W
 from IPython.display import display, clear_output
 
 
-# Expose captured inputs to the notebook
 LAST_UI_STATE: dict | None = None
 LAST_INPUTS: dict | None = None
 
@@ -25,10 +24,6 @@ def get_last_inputs() -> dict | None:
 
 # ----------------------------- shell helpers -----------------------------
 def _sh(cmd: str, cwd: str | None = None, timeout: int | None = None) -> subprocess.CompletedProcess:
-    """
-    Run a bash command (Colab-friendly). Never raises; caller inspects returncode.
-    stdout/stderr are captured (so notebook doesn't spam output).
-    """
     return subprocess.run(
         ["bash", "-lc", cmd],
         cwd=cwd,
@@ -44,9 +39,6 @@ def _ldconfig_has_libg2c() -> bool:
 
 
 def _ensure_libg2c() -> None:
-    """
-    Install libg2c.so.0 runtime (amd64) if missing.
-    """
     if _ldconfig_has_libg2c():
         return
 
@@ -77,10 +69,6 @@ def _ensure_libg2c() -> None:
 
 
 def _ensure_repo(fresh: bool = False) -> str:
-    """
-    Ensure /content/hingeprot_fortran exists and has hingeprot/ inside.
-    Returns hingeprot directory path.
-    """
     root = "/content/hingeprot_fortran"
     hp = os.path.join(root, "hingeprot")
     url = "https://github.com/enesemretas/hingeprot_fortran.git"
@@ -88,9 +76,8 @@ def _ensure_repo(fresh: bool = False) -> str:
     here = os.path.abspath(__file__)
     running_inside = here.startswith(os.path.abspath(root) + os.sep)
 
-    if fresh:
-        if not running_inside:
-            shutil.rmtree(root, ignore_errors=True)
+    if fresh and not running_inside:
+        shutil.rmtree(root, ignore_errors=True)
 
     if not os.path.isdir(hp):
         os.makedirs("/content", exist_ok=True)
@@ -106,9 +93,6 @@ def _ensure_repo(fresh: bool = False) -> str:
 
 
 def _write_runHingeProt_pl(hingeprot_dir: str, gnm_cut: float, anm_cut: float) -> str:
-    """
-    Create runHingeProt.pl with user-provided cutoffs.
-    """
     gnm_i = int(round(float(gnm_cut)))
     anm_i = int(round(float(anm_cut)))
 
@@ -170,10 +154,6 @@ def _read_text_file(path: str, max_lines: int = 900) -> str:
 
 
 def _find_hinges_file(out_dir: str, pdb_filename: str) -> str | None:
-    """
-    Prefer exactly: PDB_ID.pdb.new.hinges
-    Then fallback candidates.
-    """
     candidates = [
         os.path.join(out_dir, f"{pdb_filename}.new.hinges"),
         os.path.join(out_dir, f"{pdb_filename}.new.hinge"),
@@ -190,14 +170,6 @@ def _find_hinges_file(out_dir: str, pdb_filename: str) -> str | None:
 
 # ----------------------------- UI -----------------------------
 def launch(runs_root: str = "/content/hingeprot_runs"):
-    """
-    Colab UI:
-      - Collect PDB (code or upload), detect chains, collect cutoffs
-      - Show py3Dmol viewer (right panel)
-      - Run HingeProt (Fortran) -> installs libs, ensures repo, writes runHingeProt.pl, runs perl
-      - Move outputs to run folder named with PDB ID
-      - Display content of PDB_ID.pdb.new.hinges (alias created if needed)
-    """
     from google.colab import output  # colab-only
     output.enable_custom_widget_manager()
 
@@ -267,7 +239,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             import py3Dmol  # type: ignore
             return py3Dmol
 
-    # ---------- UI elements ----------
+    # ---------- UI ----------
     css = W.HTML(r"""
     <style>
     .hp-card {border:1px solid #e5e7eb; border-radius:14px; padding:14px 16px; margin:10px 0; background:#fff;}
@@ -299,7 +271,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       <div>
         <div class="hp-title">HINGE<span class="prot">prot</span></div>
         <div class="hp-underline"></div>
-        <div class="hp-tagline">Colab UI + Fortran Runner (with 3D viewer)</div>
+        <div class="hp-tagline">Colab UI + Fortran Runner (simple chain coloring)</div>
       </div>
     </div>
     """)
@@ -369,7 +341,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     def _set_status(text: str):
         status_box.value = f'<div class="hp-pre">{_safe_html(text)}</div>'
 
-    # ---------- 3D viewer (right panel) ----------
+    # ---------- viewer ----------
     viewer_out = W.Output(
         layout=W.Layout(
             width="560px",
@@ -380,7 +352,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             overflow="hidden"
         )
     )
-    viewer_title = W.HTML('<div class="hp-card"><b>3D Viewer (hover/click)</b></div>')
+    viewer_title = W.HTML('<div class="hp-card"><b>3D Viewer</b></div>')
     viewer_card = W.VBox([viewer_title, viewer_out], layout=W.Layout(width="560px"))
 
     def _viewer_placeholder(msg: str = "Load a PDB to preview it here."):
@@ -409,7 +381,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     global LAST_UI_STATE
     LAST_UI_STATE = state
 
-    # ---------- chain selection logic ----------
+    # ---------- chain selection ----------
     def _selected_chains() -> list[str]:
         detected = state.get("detected_chains", [])
         return [ch for ch in detected if ch in state["chain_cbs"] and state["chain_cbs"][ch].value]
@@ -442,7 +414,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         if not all_now:
             state["manual_selection"] = tuple(sel)
 
-    # ---------- viewer refresh ----------
     def _refresh_viewer():
         if not state.get("pdb_text"):
             _viewer_placeholder()
@@ -460,81 +431,16 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         else:
             selected = []
 
-        palette = ["red", "blue", "green", "orange", "purple", "teal", "magenta", "gold"]
-        chain_color = {ch: palette[i % len(palette)] for i, ch in enumerate(selected)}
-
-        selected_js = json.dumps(selected)
-        colors_js = json.dumps(chain_color)
-
         v = py3Dmol.view(width=560, height=360)
         v.addModel(pdb_text, "pdb")
         v.setBackgroundColor("white")
 
-        # Base: everything grey
+        # base: grey
         v.setStyle({}, {"cartoon": {"color": "lightgray"}})
 
-        # Selected chains colored
-        for ch, col in chain_color.items():
-            v.setStyle({"chain": ch}, {"cartoon": {"color": col}})
-
-        # Hover label (temporary)
-        hover_cb = r"""
-function(atom,viewer,event,container){
-  if(!atom._hp_hoverLabel){
-    atom._hp_hoverLabel = viewer.addLabel(
-      atom.chain + ":" + atom.resn + atom.resi,
-      {position: atom, backgroundColor: "mintcream", fontColor: "black",
-       borderColor: "black", borderThickness: 1, inFront: true}
-    );
-  }
-}
-"""
-        unhover_cb = r"""
-function(atom,viewer){
-  if(atom._hp_hoverLabel){
-    viewer.removeLabel(atom._hp_hoverLabel);
-    delete atom._hp_hoverLabel;
-  }
-}
-"""
-
-        # Click highlight: reset base style, recolor selected chains, then highlight residue
-        click_cb = f"""
-function(atom,viewer,event,container){{
-  var selectedChains = {selected_js};
-  var chainColors = {colors_js};
-
-  function resetBase(){{
-    viewer.setStyle({{}}, {{cartoon: {{color: "lightgray"}}}});
-    for (var i=0; i<selectedChains.length; i++) {{
-      var ch = selectedChains[i];
-      var col = chainColors[ch] || "lightgray";
-      viewer.setStyle({{chain: ch}}, {{cartoon: {{color: col}}}});
-    }}
-  }}
-
-  resetBase();
-
-  var sel = {{chain: atom.chain, resi: atom.resi}};
-  var col = chainColors[atom.chain] || "yellow";
-
-  viewer.addStyle(sel, {{stick: {{radius: 0.25, color: col}}}});
-  viewer.addStyle(sel, {{sphere: {{radius: 1.1, color: col, opacity: 0.35}}}});
-
-  viewer.removeAllLabels();
-  viewer.addLabel(
-    atom.chain + ":" + atom.resn + atom.resi,
-    {{position: atom, backgroundColor: "white", fontColor: "black",
-      borderColor: "black", borderThickness: 1, inFront: true}}
-  );
-
-  viewer.zoomTo(sel);
-  viewer.render();
-}}
-"""
-
-        v.setHoverable({}, True, hover_cb, unhover_cb)
-        v.setClickable({}, True, click_cb)
+        # selected: red
+        for ch in selected:
+            v.setStyle({"chain": ch}, {"cartoon": {"color": "red"}})
 
         v.zoomTo()
         v.render()
@@ -754,8 +660,7 @@ function(atom,viewer,event,container){{
                 f"Loaded PDB (ID={tag})\n"
                 f"Run folder: {run_dir}\n"
                 f"Detected chains: {', '.join(chs)}\n\n"
-                "Viewer: hover for residue label, click to highlight residue.\n"
-                "Now select chains, set cutoffs, then click 'Run HingeProt (Fortran)'."
+                "Viewer: selected chain(s) are RED, others are GREY."
             )
 
             _refresh_viewer()
@@ -784,7 +689,7 @@ function(atom,viewer,event,container){{
             "pdb_tag": state.get("pdb_tag"),
             "pdb_filename": state.get("pdb_filename"),
             "run_dir_runsroot": state.get("run_dir"),
-            "chains_str": "".join(chain_list),   # IMPORTANT: no separators
+            "chains_str": "".join(chain_list),
             "gnm_cutoff_A": float(get_gnm_cut()),
             "anm_cutoff_A": float(get_anm_cut()),
         }
@@ -837,8 +742,7 @@ function(atom,viewer,event,container){{
 
             state["last_out_dir"] = dest_out_dir
 
-            # Create alias so requested file name always exists:
-            #   PDB_ID.pdb.new.hinges  (requested)
+            # ensure requested filename exists (alias)
             src_hinge = os.path.join(dest_out_dir, f"{pdb_filename}.hinge")
             alias_hinges = os.path.join(dest_out_dir, f"{pdb_filename}.new.hinges")
             if os.path.exists(src_hinge) and not os.path.exists(alias_hinges):
