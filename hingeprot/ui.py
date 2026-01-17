@@ -316,10 +316,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     )
 
     btn_choose_file = W.Button(description="Choose file", icon="upload", layout=W.Layout(width="180px"))
+    upload_prog = W.IntProgress(value=0, min=0, max=100, description="", layout=W.Layout(width="160px"))
+    upload_prog.bar_style = ""  # "", "info", "success", "warning", "danger"
     file_lbl = W.Label("No file chosen")
 
     code_box = W.HBox([pdb_code], layout=W.Layout(align_items="center"))
-    upload_box = W.HBox([btn_choose_file, file_lbl], layout=W.Layout(align_items="center", gap="10px"))
+    upload_box = W.HBox([btn_choose_file, upload_prog, file_lbl],
+                        layout=W.Layout(align_items="center", gap="10px"))
+
 
     btn_load = W.Button(description="Load / Detect Chains", button_style="info", icon="search", layout=W.Layout(width="260px"))
 
