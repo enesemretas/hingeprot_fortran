@@ -11,7 +11,7 @@ import subprocess
 
 import requests
 import ipywidgets as W
-from IPython.display import display, clear_output
+from IPython.display import display, clear_output, HTML
 
 
 LAST_UI_STATE: dict | None = None
@@ -431,7 +431,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         else:
             selected = []
 
-        v = py3Dmol.view(width=560, height=360)
+        v = py3Dmol.view(width=560, height=360, divid=f"hp3d_{uuid.uuid4().hex}")
         v.addModel(pdb_text, "pdb")
         v.setBackgroundColor("white")
 
@@ -443,11 +443,10 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             v.setStyle({"chain": ch}, {"cartoon": {"color": "red"}})
 
         v.zoomTo()
-        v.render()
 
         with viewer_out:
             clear_output(wait=True)
-            display(v.show())
+            display(HTML(v._make_html()))
 
     # ---------- input visibility ----------
     def _sync_input_visibility(*_):
