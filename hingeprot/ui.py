@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import datetime
 import base64
 import uuid
@@ -10,7 +11,7 @@ import subprocess
 
 import requests
 import ipywidgets as W
-from IPython.display import display
+from IPython.display import display, clear_output
 
 
 # Expose captured inputs to the notebook
@@ -42,14 +43,12 @@ def _ldconfig_has_libg2c() -> bool:
     return r.returncode == 0
 
 
-def _ensure_libg2c(log: callable) -> None:
+def _ensure_libg2c() -> None:
     """
     Install libg2c.so.0 runtime (amd64) if missing.
     """
     if _ldconfig_has_libg2c():
         return
-
-    log("Installing libg2c.so.0 runtime (amd64) ...")
 
     os.makedirs("/content", exist_ok=True)
     os.chdir("/content")
@@ -73,14 +72,11 @@ def _ensure_libg2c(log: callable) -> None:
         raise RuntimeError(f"apt-get -f install failed:\n{r.stderr}")
 
     _sh("ldconfig")
-
     if not _ldconfig_has_libg2c():
         raise RuntimeError("libg2c.so.0 still not found after installation.")
 
-    log("✅ libg2c.so.0 ready.")
 
-
-def _ensure_repo(log: callable, fresh: bool = False) -> str:
+def _ensure_repo(fresh: bool = False) -> str:
     """
     Ensure /content/hingeprot_fortran exists and has hingeprot/ inside.
     Returns hingeprot directory path.
@@ -93,13 +89,10 @@ def _ensure_repo(log: callable, fresh: bool = False) -> str:
     running_inside = here.startswith(os.path.abspath(root) + os.sep)
 
     if fresh:
-        if running_inside:
-            log("⚠️ Fresh clone requested but ui.py is running inside hingeprot_fortran; skipping rm -rf for safety.")
-        else:
+        if not running_inside:
             shutil.rmtree(root, ignore_errors=True)
 
     if not os.path.isdir(hp):
-        log("Cloning hingeprot_fortran ...")
         os.makedirs("/content", exist_ok=True)
         os.chdir("/content")
         r = _sh(f"git clone -q {url}")
@@ -107,7 +100,7 @@ def _ensure_repo(log: callable, fresh: bool = False) -> str:
             raise RuntimeError(f"git clone failed:\n{r.stderr}")
 
     if not os.path.isdir(hp):
-        raise RuntimeError("Repo clone seems incomplete: missing /content/hingeprot_fortran/hingeprot")
+        raise RuntimeError("Repo clone incomplete: missing /content/hingeprot_fortran/hingeprot")
 
     return hp
 
@@ -166,7 +159,7 @@ rename("$pdbCode.new.moved2.pdb", "$pdbCode.mode2.pdb");
     return pl_path
 
 
-def _read_text_file(path: str, max_lines: int = 800) -> str:
+def _read_text_file(path: str, max_lines: int = 900) -> str:
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         lines = f.read().splitlines()
     if len(lines) > max_lines:
@@ -182,7 +175,7 @@ def _find_hinges_file(out_dir: str, pdb_filename: str) -> str | None:
     Then fallback candidates.
     """
     candidates = [
-        os.path.join(out_dir, f"{pdb_filename}.new.hinges"),  # requested
+        os.path.join(out_dir, f"{pdb_filename}.new.hinges"),
         os.path.join(out_dir, f"{pdb_filename}.new.hinge"),
         os.path.join(out_dir, f"{pdb_filename}.hinges"),
         os.path.join(out_dir, f"{pdb_filename}.hinge"),
@@ -200,9 +193,10 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     """
     Colab UI:
       - Collect PDB (code or upload), detect chains, collect cutoffs
+      - Show py3Dmol viewer (right panel)
       - Run HingeProt (Fortran) -> installs libs, ensures repo, writes runHingeProt.pl, runs perl
-      - Moves outputs to run folder named with PDB ID
-      - Displays content of PDB_ID.pdb.new.hinges (or fallback)
+      - Move outputs to run folder named with PDB ID
+      - Display content of PDB_ID.pdb.new.hinges (alias created if needed)
     """
     from google.colab import output  # colab-only
     output.enable_custom_widget_manager()
@@ -262,6 +256,17 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         row = W.HBox([lbl, toggle, value_box], layout=W.Layout(align_items="center", gap="12px"))
         return row, get_value
 
+    def _ensure_py3dmol():
+        try:
+            import py3Dmol  # type: ignore
+            return py3Dmol
+        except Exception:
+            r = _sh("python3 -m pip -q install py3Dmol")
+            if r.returncode != 0:
+                raise RuntimeError("py3Dmol install failed. Try: !pip -q install py3Dmol")
+            import py3Dmol  # type: ignore
+            return py3Dmol
+
     # ---------- UI elements ----------
     css = W.HTML(r"""
     <style>
@@ -294,7 +299,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       <div>
         <div class="hp-title">HINGE<span class="prot">prot</span></div>
         <div class="hp-underline"></div>
-        <div class="hp-tagline">Colab UI + Fortran Runner</div>
+        <div class="hp-tagline">Colab UI + Fortran Runner (with 3D viewer)</div>
       </div>
     </div>
     """)
@@ -317,13 +322,12 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
     btn_choose_file = W.Button(description="Choose file", icon="upload", layout=W.Layout(width="180px"))
     upload_prog = W.IntProgress(value=0, min=0, max=100, description="", layout=W.Layout(width="160px"))
-    upload_prog.bar_style = ""  # "", "info", "success", "warning", "danger"
+    upload_prog.bar_style = ""
     file_lbl = W.Label("No file chosen")
 
     code_box = W.HBox([pdb_code], layout=W.Layout(align_items="center"))
     upload_box = W.HBox([btn_choose_file, upload_prog, file_lbl],
                         layout=W.Layout(align_items="center", gap="10px"))
-
 
     btn_load = W.Button(description="Load / Detect Chains", button_style="info", icon="search", layout=W.Layout(width="260px"))
 
@@ -365,6 +369,27 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     def _set_status(text: str):
         status_box.value = f'<div class="hp-pre">{_safe_html(text)}</div>'
 
+    # ---------- 3D viewer (right panel) ----------
+    viewer_out = W.Output(
+        layout=W.Layout(
+            width="560px",
+            height="360px",
+            border="1px solid #e5e7eb",
+            border_radius="12px",
+            padding="6px",
+            overflow="hidden"
+        )
+    )
+    viewer_title = W.HTML('<div class="hp-card"><b>3D Viewer (hover/click)</b></div>')
+    viewer_card = W.VBox([viewer_title, viewer_out], layout=W.Layout(width="560px"))
+
+    def _viewer_placeholder(msg: str = "Load a PDB to preview it here."):
+        with viewer_out:
+            clear_output(wait=True)
+            print(msg)
+
+    _viewer_placeholder()
+
     # ---------- state ----------
     state = {
         "pdb_text": None,
@@ -383,120 +408,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     }
     global LAST_UI_STATE
     LAST_UI_STATE = state
-
-    # ---------- input visibility ----------
-    def _sync_input_visibility(*_):
-        if input_mode.value == "code":
-            code_box.layout.display = ""
-            upload_box.layout.display = "none"
-        else:
-            code_box.layout.display = "none"
-            upload_box.layout.display = ""
-
-    _sync_input_visibility()
-    input_mode.observe(lambda ch: _sync_input_visibility(), names="value")
-
-    # ---------- uploader callback ----------
-    cb_name = f"hingeprot_uploader_{uuid.uuid4().hex}"
-
-    def _js_upload_callback(payload):
-        try:
-            name = payload.get("name", "upload.pdb")
-            data_b64 = payload.get("data_b64", "")
-            if not data_b64:
-                _set_status("Upload callback received empty data.")
-                return
-            data = base64.b64decode(data_b64.encode("utf-8"))
-            upload_prog.value = 100
-            upload_prog.bar_style = "success"
-
-            state["upload_name"] = name
-            state["upload_bytes"] = data
-            file_lbl.value = name
-            _set_status(f"Uploaded file: {name} ({len(data)} bytes)\nNow click 'Load / Detect Chains'.")
-        except Exception as e:
-            _set_status(f"Upload callback error: {e}")
-
-    output.register_callback(cb_name, _js_upload_callback)
-
-    cb_prog = f"hingeprot_uploadprog_{uuid.uuid4().hex}"
-
-    def _js_upload_progress_callback(payload):
-        try:
-            pct = int(payload.get("pct", 0))
-            pct = max(0, min(100, pct))
-            upload_prog.bar_style = "info" if pct < 100 else "success"
-            upload_prog.value = pct
-        except Exception:
-            pass
-
-    output.register_callback(cb_prog, _js_upload_progress_callback)
-
-    def on_choose_file(_):
-        # reset progress immediately
-        upload_prog.value = 0
-        upload_prog.bar_style = "info"
-
-        js = f"""
-        (async () => {{
-          const input = document.createElement('input');
-          input.type = 'file';
-          input.accept = '.pdb,.ent';
-          input.style.display = 'none';
-          document.body.appendChild(input);
-
-          input.onchange = async () => {{
-            const file = input.files && input.files[0];
-            document.body.removeChild(input);
-            if (!file) return;
-
-            const reader = new FileReader();
-
-            // progress updates
-            reader.onprogress = async (e) => {{
-              try {{
-                if (e.lengthComputable) {{
-                  const pct = Math.round((e.loaded / e.total) * 100);
-                  await google.colab.kernel.invokeFunction(
-                    "{cb_prog}",
-                    [{{pct: pct}}],
-                    {{}}
-                  );
-                }}
-              }} catch (err) {{}}
-            }};
-    
-            reader.onloadstart = async () => {{
-              try {{
-                await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: 0}}], {{}});
-              }} catch (err) {{}}
-            }};
-
-            reader.onloadend = async () => {{
-              try {{
-                await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: 100}}], {{}});
-              }} catch (err) {{}}
-            }};
-
-            reader.onload = async () => {{
-              const b64 = (reader.result || "").split(",")[1] || "";
-              await google.colab.kernel.invokeFunction(
-                "{cb_name}",
-                [{{name: file.name, data_b64: b64}}],
-                {{}}
-              );
-            }};
-    
-            reader.readAsDataURL(file);
-          }};
-    
-          input.click();
-        }})();
-        """
-        output.eval_js(js)
-
-
-    btn_choose_file.on_click(on_choose_file)
 
     # ---------- chain selection logic ----------
     def _selected_chains() -> list[str]:
@@ -531,8 +442,215 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         if not all_now:
             state["manual_selection"] = tuple(sel)
 
+    # ---------- viewer refresh ----------
+    def _refresh_viewer():
+        if not state.get("pdb_text"):
+            _viewer_placeholder()
+            return
+
+        py3Dmol = _ensure_py3dmol()
+        pdb_text = state["pdb_text"]
+
+        detected = state.get("detected_chains", [])
+        if detected:
+            if all_chains.value:
+                selected = list(detected)
+            else:
+                selected = _selected_chains()
+        else:
+            selected = []
+
+        palette = ["red", "blue", "green", "orange", "purple", "teal", "magenta", "gold"]
+        chain_color = {ch: palette[i % len(palette)] for i, ch in enumerate(selected)}
+
+        selected_js = json.dumps(selected)
+        colors_js = json.dumps(chain_color)
+
+        v = py3Dmol.view(width=560, height=360)
+        v.addModel(pdb_text, "pdb")
+        v.setBackgroundColor("white")
+
+        # Base: everything grey
+        v.setStyle({}, {"cartoon": {"color": "lightgray"}})
+
+        # Selected chains colored
+        for ch, col in chain_color.items():
+            v.setStyle({"chain": ch}, {"cartoon": {"color": col}})
+
+        # Hover label (temporary)
+        hover_cb = r"""
+function(atom,viewer,event,container){
+  if(!atom._hp_hoverLabel){
+    atom._hp_hoverLabel = viewer.addLabel(
+      atom.chain + ":" + atom.resn + atom.resi,
+      {position: atom, backgroundColor: "mintcream", fontColor: "black",
+       borderColor: "black", borderThickness: 1, inFront: true}
+    );
+  }
+}
+"""
+        unhover_cb = r"""
+function(atom,viewer){
+  if(atom._hp_hoverLabel){
+    viewer.removeLabel(atom._hp_hoverLabel);
+    delete atom._hp_hoverLabel;
+  }
+}
+"""
+
+        # Click highlight: reset base style, recolor selected chains, then highlight residue
+        click_cb = f"""
+function(atom,viewer,event,container){{
+  var selectedChains = {selected_js};
+  var chainColors = {colors_js};
+
+  function resetBase(){{
+    viewer.setStyle({{}}, {{cartoon: {{color: "lightgray"}}}});
+    for (var i=0; i<selectedChains.length; i++) {{
+      var ch = selectedChains[i];
+      var col = chainColors[ch] || "lightgray";
+      viewer.setStyle({{chain: ch}}, {{cartoon: {{color: col}}}});
+    }}
+  }}
+
+  resetBase();
+
+  var sel = {{chain: atom.chain, resi: atom.resi}};
+  var col = chainColors[atom.chain] || "yellow";
+
+  viewer.addStyle(sel, {{stick: {{radius: 0.25, color: col}}}});
+  viewer.addStyle(sel, {{sphere: {{radius: 1.1, color: col, opacity: 0.35}}}});
+
+  viewer.removeAllLabels();
+  viewer.addLabel(
+    atom.chain + ":" + atom.resn + atom.resi,
+    {{position: atom, backgroundColor: "white", fontColor: "black",
+      borderColor: "black", borderThickness: 1, inFront: true}}
+  );
+
+  viewer.zoomTo(sel);
+  viewer.render();
+}}
+"""
+
+        v.setHoverable({}, True, hover_cb, unhover_cb)
+        v.setClickable({}, True, click_cb)
+
+        v.zoomTo()
+        v.render()
+
+        with viewer_out:
+            clear_output(wait=True)
+            display(v.show())
+
+    # ---------- input visibility ----------
+    def _sync_input_visibility(*_):
+        if input_mode.value == "code":
+            code_box.layout.display = ""
+            upload_box.layout.display = "none"
+        else:
+            code_box.layout.display = "none"
+            upload_box.layout.display = ""
+
+    _sync_input_visibility()
+    input_mode.observe(lambda ch: _sync_input_visibility(), names="value")
+
+    # ---------- uploader callbacks ----------
+    cb_name = f"hingeprot_uploader_{uuid.uuid4().hex}"
+    cb_prog = f"hingeprot_uploadprog_{uuid.uuid4().hex}"
+
+    def _js_upload_progress_callback(payload):
+        try:
+            pct = int(payload.get("pct", 0))
+            pct = max(0, min(100, pct))
+            upload_prog.value = pct
+            upload_prog.bar_style = "info" if pct < 100 else "success"
+        except Exception:
+            pass
+
+    def _js_upload_callback(payload):
+        try:
+            name = payload.get("name", "upload.pdb")
+            data_b64 = payload.get("data_b64", "")
+            if not data_b64:
+                _set_status("Upload callback received empty data.")
+                return
+            data = base64.b64decode(data_b64.encode("utf-8"))
+            state["upload_name"] = name
+            state["upload_bytes"] = data
+            file_lbl.value = name
+            upload_prog.value = 100
+            upload_prog.bar_style = "success"
+            _set_status(f"Uploaded file: {name} ({len(data)} bytes)\nNow click 'Load / Detect Chains'.")
+        except Exception as e:
+            _set_status(f"Upload callback error: {e}")
+
+    output.register_callback(cb_prog, _js_upload_progress_callback)
+    output.register_callback(cb_name, _js_upload_callback)
+
+    def on_choose_file(_):
+        upload_prog.value = 0
+        upload_prog.bar_style = "info"
+
+        js = f"""
+        (async () => {{
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = '.pdb,.ent';
+          input.style.display = 'none';
+          document.body.appendChild(input);
+
+          input.onchange = async () => {{
+            const file = input.files && input.files[0];
+            document.body.removeChild(input);
+            if (!file) return;
+
+            const reader = new FileReader();
+
+            reader.onloadstart = async () => {{
+              try {{
+                await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: 0}}], {{}});
+              }} catch (err) {{}}
+            }};
+
+            reader.onprogress = async (e) => {{
+              try {{
+                if (e.lengthComputable) {{
+                  const pct = Math.round((e.loaded / e.total) * 100);
+                  await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: pct}}], {{}});
+                }}
+              }} catch (err) {{}}
+            }};
+
+            reader.onloadend = async () => {{
+              try {{
+                await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: 100}}], {{}});
+              }} catch (err) {{}}
+            }};
+
+            reader.onload = async () => {{
+              const b64 = (reader.result || "").split(",")[1] || "";
+              await google.colab.kernel.invokeFunction(
+                "{cb_name}",
+                [{{name: file.name, data_b64: b64}}],
+                {{}}
+              );
+            }};
+
+            reader.readAsDataURL(file);
+          }};
+
+          input.click();
+        }})();
+        """
+        output.eval_js(js)
+
+    btn_choose_file.on_click(on_choose_file)
+
+    # ---------- chain checkbox rebuild ----------
     def _on_chain_cb_change(_):
         _update_all_checkbox_from_selection()
+        _refresh_viewer()
 
     def _rebuild_chain_checkboxes(chains: list[str], default_selected: list[str]):
         state["chain_cbs"] = {}
@@ -569,6 +687,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             _set_selection(prev)
 
         _update_all_checkbox_from_selection()
+        _refresh_viewer()
 
     all_chains.observe(_on_all_chains_toggle, names="value")
 
@@ -581,7 +700,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         try:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            # Determine PDB text + filename/tag FIRST
             if input_mode.value == "upload":
                 if state["upload_bytes"] is None:
                     raise ValueError("Please click 'Choose file' and upload a PDB first.")
@@ -603,7 +721,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 pdb_filename = f"{code4.lower()}.pdb"
                 tag = code4
 
-            # Create run dir that starts with PDB ID
             run_dir = os.path.join(runs_root, f"{tag}_run_{ts}")
             os.makedirs(run_dir, exist_ok=True)
 
@@ -612,13 +729,11 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             state["pdb_filename"] = pdb_filename
             state["pdb_tag"] = tag
 
-            # Save pdb into run_dir
             pdb_path = os.path.join(run_dir, pdb_filename)
             with open(pdb_path, "w", encoding="utf-8") as f:
                 f.write(pdb_text)
             state["pdb_path"] = pdb_path
 
-            # Detect chains
             chs = _detect_chains_from_text(pdb_text)
             if not chs:
                 raise RuntimeError("No chains detected in the PDB.")
@@ -639,8 +754,11 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 f"Loaded PDB (ID={tag})\n"
                 f"Run folder: {run_dir}\n"
                 f"Detected chains: {', '.join(chs)}\n\n"
+                "Viewer: hover for residue label, click to highlight residue.\n"
                 "Now select chains, set cutoffs, then click 'Run HingeProt (Fortran)'."
             )
+
+            _refresh_viewer()
 
         except Exception as e:
             progress.bar_style = "danger"
@@ -661,21 +779,15 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             if not chain_list:
                 raise RuntimeError("Please select at least one chain (or tick All chains).")
 
-        captured = {
+        return {
             "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-            "input_mode": input_mode.value,
             "pdb_tag": state.get("pdb_tag"),
             "pdb_filename": state.get("pdb_filename"),
-            "pdb_path_runsroot": state.get("pdb_path"),
             "run_dir_runsroot": state.get("run_dir"),
-            "detected_chains": list(detected),
-            "all_chains": bool(all_chains.value),
-            "selected_chains": list(chain_list),
             "chains_str": "".join(chain_list),   # IMPORTANT: no separators
             "gnm_cutoff_A": float(get_gnm_cut()),
             "anm_cutoff_A": float(get_anm_cut()),
         }
-        return captured
 
     def on_run_fortran_clicked(_):
         progress.bar_style = "info"
@@ -685,16 +797,15 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             LAST_INPUTS = captured
 
             progress.value = 1
-            _ensure_libg2c(lambda _msg: None)  # keep quiet (UI will show final hinges anyway)
+            _ensure_libg2c()
 
             progress.value = 2
-            hp_dir = _ensure_repo(lambda _msg: None, fresh=False)
+            hp_dir = _ensure_repo(fresh=False)
             state["hingeprot_dir"] = hp_dir
 
             progress.value = 3
             _write_runHingeProt_pl(hp_dir, captured["gnm_cutoff_A"], captured["anm_cutoff_A"])
 
-            # Put pdb in hingeprot dir with expected filename
             pdb_filename = captured["pdb_filename"]
             pdb_abs = os.path.join(hp_dir, pdb_filename)
             with open(pdb_abs, "w", encoding="utf-8") as f:
@@ -703,17 +814,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             chains_str = captured["chains_str"]
             out_dir_repo = os.path.join(hp_dir, f"{pdb_filename}.{chains_str}")
 
-            # Clean previous
             if os.path.isdir(out_dir_repo):
                 shutil.rmtree(out_dir_repo, ignore_errors=True)
 
-            # Run perl
             cmd = f"perl ./runHingeProt.pl {pdb_filename} {chains_str}"
             r = _sh(cmd, cwd=hp_dir)
             if r.returncode != 0:
                 raise RuntimeError(f"runHingeProt.pl failed (return code {r.returncode}).\n{r.stderr}")
 
-            # Move outputs into run folder
             run_dir = captured["run_dir_runsroot"]
             if not run_dir or not os.path.isdir(run_dir):
                 raise RuntimeError("Run folder not found. Please 'Load / Detect Chains' again.")
@@ -721,15 +829,24 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             dest_out_dir = os.path.join(run_dir, os.path.basename(out_dir_repo))
             if os.path.isdir(dest_out_dir):
                 shutil.rmtree(dest_out_dir, ignore_errors=True)
+
             if os.path.isdir(out_dir_repo):
                 shutil.move(out_dir_repo, dest_out_dir)
             else:
-                # Sometimes tool may create output elsewhere; but normally this exists
                 raise RuntimeError(f"Expected output folder not found: {out_dir_repo}")
 
             state["last_out_dir"] = dest_out_dir
 
-            # Print hinges content on result screen
+            # Create alias so requested file name always exists:
+            #   PDB_ID.pdb.new.hinges  (requested)
+            src_hinge = os.path.join(dest_out_dir, f"{pdb_filename}.hinge")
+            alias_hinges = os.path.join(dest_out_dir, f"{pdb_filename}.new.hinges")
+            if os.path.exists(src_hinge) and not os.path.exists(alias_hinges):
+                try:
+                    shutil.copyfile(src_hinge, alias_hinges)
+                except Exception:
+                    pass
+
             hinges_fp = _find_hinges_file(dest_out_dir, pdb_filename)
             if hinges_fp:
                 txt = _read_text_file(hinges_fp, max_lines=900)
@@ -753,9 +870,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         input_mode.value = "code"
         state["upload_name"] = None
         state["upload_bytes"] = None
+        file_lbl.value = "No file chosen"
         upload_prog.value = 0
         upload_prog.bar_style = ""
-        file_lbl.value = "No file chosen"
 
         state["pdb_text"] = None
         state["pdb_filename"] = None
@@ -779,6 +896,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         progress.max = 4
         progress.bar_style = ""
         _set_status("Cleared. Load a PDB to detect chains.")
+        _viewer_placeholder()
 
     btn_load.on_click(on_load_clicked)
     btn_run_fortran.on_click(on_run_fortran_clicked)
@@ -796,12 +914,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         progress,
         W.HBox([btn_run_fortran, btn_clear]),
         W.HTML("</div>"),
-    ])
+    ], layout=W.Layout(width="620px"))
 
     output_card = W.VBox([
         W.HTML('<div class="hp-card"><b>Hinges Output</b></div>'),
         status_box,
     ])
 
-    display(css, header, form_card, output_card)
+    top_row = W.HBox([form_card, viewer_card], layout=W.Layout(align_items="flex-start", gap="14px"))
+
+    display(css, header, top_row, output_card)
     return None
