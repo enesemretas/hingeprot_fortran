@@ -251,10 +251,29 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         new = f"hp3d_{uuid.uuid4().hex}"
         return raw_html.replace(old, new)
 
+    # chain colors (deterministic per detected order)
+    _CHAIN_PALETTE = [
+        "red", "blue", "green", "orange", "purple", "cyan", "magenta",
+        "yellow", "teal", "brown", "pink", "lime", "navy", "gold"
+    ]
+
+    def _assign_chain_colors(chains: list[str]) -> dict[str, str]:
+        cmap: dict[str, str] = {}
+        for i, ch in enumerate(chains):
+            cmap[ch] = _CHAIN_PALETTE[i % len(_CHAIN_PALETTE)]
+        return cmap
+
     # ---------- UI ----------
     css = W.HTML(r"""
     <style>
-    .hp-card {border:1px solid #e5e7eb; border-radius:14px; padding:14px 16px; margin:10px 0; background:#fff;}
+    .hp-card {
+      border:1px solid #e5e7eb;
+      border-radius:14px;
+      padding:14px 16px;
+      margin:0;                 /* IMPORTANT: row alignment */
+      background:#fff;
+      box-sizing:border-box;    /* IMPORTANT: same width actually means same width */
+    }
     .hp-headerbar{
       border:1px solid #e5e7eb;
       border-radius:16px;
@@ -266,6 +285,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       flex-direction:column;
       align-items:flex-start;
       gap:10px;
+      box-sizing:border-box;
     }
     .hp-brand{
       display:flex;
@@ -287,8 +307,17 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       line-height:1.2;
       text-align:left;
     }
-    .hp-pre{ white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-             font-size: 13px; line-height: 1.35; background:#0b1020; color:#e5e7eb; padding:12px; border-radius:12px; border:1px solid #1f2937;}
+    .hp-pre{
+      white-space:pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.35;
+      background:#0b1020;
+      color:#e5e7eb;
+      padding:12px;
+      border-radius:12px;
+      border:1px solid #1f2937;
+    }
     </style>
     """)
 
@@ -320,13 +349,16 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     )
     header_bar.add_class("hp-headerbar")
 
+    # --- bold Input label ---
+    input_label = W.HTML("<b>Input:</b>", layout=W.Layout(width="60px"))
     input_mode = W.ToggleButtons(
         options=[("Enter PDB code", "code"), ("Upload PDB file", "upload")],
         value="code",
-        description="Input:",
-        style={"description_width": "60px", "button_width": "170px"},
+        description="",  # handled by input_label
+        style={"description_width": "0px", "button_width": "170px"},
         layout=W.Layout(width="420px"),
     )
+    input_row = W.HBox([input_label, input_mode], layout=W.Layout(align_items="center", gap="10px"))
 
     pdb_code = W.Text(
         value="",
@@ -342,8 +374,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     file_lbl = W.Label("No file chosen")
 
     code_box = W.HBox([pdb_code], layout=W.Layout(align_items="center"))
-    upload_box = W.HBox([btn_choose_file, upload_prog, file_lbl],
-                        layout=W.Layout(align_items="center", gap="10px"))
+    upload_box = W.HBox([btn_choose_file, upload_prog, file_lbl], layout=W.Layout(align_items="center", gap="10px"))
 
     btn_load = W.Button(description="Load / Detect Chains", button_style="info", icon="search", layout=W.Layout(width="260px"))
 
@@ -385,11 +416,15 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     def _set_status(text: str):
         status_box.value = f'<div class="hp-pre">{_safe_html(text)}</div>'
 
-    # ---------- viewer (boxed like form; same width) ----------
+    # ---------- viewer (boxed like form; same width & stretchable height) ----------
     CARD_W = 620
-    INNER_W = CARD_W - 32  # hp-card padding left+right = 16+16
+    CARD_PAD = 16  # hp-card left+right padding
+    OUT_PAD = 6    # viewer_out padding
+    OUT_BORDER = 1
+    INNER_W = CARD_W - 2 * CARD_PAD
 
-    VIEW_W = INNER_W  # py3Dmol width
+    # IMPORTANT: avoid horizontal scrollbar by making py3Dmol slightly smaller than inner area
+    VIEW_W = INNER_W - 2 * (OUT_PAD + OUT_BORDER)
     VIEW_H = 280
 
     viewer_out = W.Output(
@@ -398,13 +433,23 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             height=f"{VIEW_H}px",
             border="1px solid #e5e7eb",
             border_radius="12px",
-            padding="6px",
-            overflow="hidden"
+            padding=f"{OUT_PAD}px",
+            overflow="hidden",
         )
     )
     viewer_title = W.HTML('<div style="font-weight:800; margin:2px 0 8px 2px;">3D Viewer</div>')
 
-    viewer_card = W.VBox([viewer_title, viewer_out], layout=W.Layout(width=f"{CARD_W}px", gap="10px"))
+    viewer_card = W.VBox(
+        [viewer_title, viewer_out],
+        layout=W.Layout(
+            width=f"{CARD_W}px",
+            gap="10px",
+            height="100%",            # allow stretch
+            display="flex",
+            flex_flow="column",
+            align_items="stretch",
+        ),
+    )
     viewer_card.add_class("hp-card")
 
     def _viewer_placeholder(msg: str = "Load a PDB to preview it here."):
@@ -425,6 +470,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         "upload_bytes": None,
         "detected_chains": [],
         "chain_cbs": {},
+        "chain_colors": {},     # NEW
         "manual_selection": (),
         "_syncing": False,
         "hingeprot_dir": None,
@@ -483,14 +529,26 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         else:
             selected = []
 
+        chain_colors: dict[str, str] = state.get("chain_colors", {}) or {}
+
         v = py3Dmol.view(width=VIEW_W, height=VIEW_H)
         v.addModel(pdb_text, "pdb")
         v.setBackgroundColor("white")
 
+        # default: everything grey
         v.setStyle({}, {"cartoon": {"color": "lightgray"}})
 
+        # selected: each chain different color
         for ch in selected:
-            v.setStyle({"chain": ch}, {"cartoon": {"color": "red"}})
+            col = chain_colors.get(ch, "red")
+            v.setStyle({"chain": ch}, {"cartoon": {"color": col}})
+
+        # ligands / hetero atoms (exclude waters)
+        # show as sticks+spheres
+        v.setStyle(
+            {"hetflag": True, "not": {"resn": ["HOH", "WAT", "DOD"]}},
+            {"stick": {}, "sphere": {"scale": 0.25}},
+        )
 
         v.zoomTo()
 
@@ -697,6 +755,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 raise RuntimeError("No chains detected in the PDB.")
             state["detected_chains"] = chs
 
+            # NEW: deterministic chain colors
+            state["chain_colors"] = _assign_chain_colors(chs)
+
             default_sel = [chs[0]]
             state["manual_selection"] = tuple(default_sel)
             _rebuild_chain_checkboxes(chs, default_sel)
@@ -708,11 +769,18 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 state["_syncing"] = False
 
             progress.value = 1
+            cmap = state.get("chain_colors", {})
+            preview = ", ".join([f"{c}:{cmap.get(c,'')}" for c in chs[:6]])
+            if len(chs) > 6:
+                preview += ", ..."
+
             _set_status(
                 f"Loaded PDB (ID={tag})\n"
                 f"Run folder: {run_dir}\n"
-                f"Detected chains: {', '.join(chs)}\n\n"
-                "Viewer: selected chain(s) are RED, others are GREY."
+                f"Detected chains: {', '.join(chs)}\n"
+                f"Chain colors: {preview}\n\n"
+                "Viewer: unselected chains are GREY; selected chains are COLORED. "
+                "Ligands (HETATM; excluding waters) are shown as sticks/spheres."
             )
 
             _refresh_viewer()
@@ -840,6 +908,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
         state["detected_chains"] = []
         state["chain_cbs"] = {}
+        state["chain_colors"] = {}
         state["manual_selection"] = ()
         state["_syncing"] = False
         all_chains.value = False
@@ -859,31 +928,36 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     btn_clear.on_click(on_clear_clicked)
 
     # --------- CARDS (same width) ---------
-    form_card = W.VBox([
-        input_mode,
-        code_box,
-        upload_box,
-        btn_load,
-        W.HTML("<hr>"),
-        chain_row,
-        W.VBox([gnm_row, anm_row], layout=W.Layout(gap="8px")),
-        progress,
-        W.HBox([btn_run_fortran, btn_clear]),
-    ], layout=W.Layout(width=f"{CARD_W}px", gap="10px"))
+    form_card = W.VBox(
+        [
+            input_row,          # NEW (bold Input:)
+            code_box,
+            upload_box,
+            btn_load,
+            W.HTML("<hr>"),
+            chain_row,
+            W.VBox([gnm_row, anm_row], layout=W.Layout(gap="8px")),
+            progress,
+            W.HBox([btn_run_fortran, btn_clear]),
+        ],
+        layout=W.Layout(width=f"{CARD_W}px", gap="10px", height="100%"),  # allow stretch
+    )
     form_card.add_class("hp-card")
 
     output_title = W.HTML("<b>Hinges Output</b>")
     output_card = W.VBox([output_title, status_box], layout=W.Layout(width="100%", gap="8px"))
     output_card.add_class("hp-card")
 
-    # wrap: dar ekranda alt alta düşsün
+    # wrap: dar ekranda alt alta düşsün; stretch: aynı hizada bitsin
     top_row = W.HBox(
         [form_card, viewer_card],
         layout=W.Layout(
             display="flex",
             flex_flow="row wrap",
-            align_items="flex-start",
+            align_items="stretch",   # IMPORTANT: same bottom alignment
+            justify_content="flex-start",
             gap="14px",
+            width="100%",
         ),
     )
     web_page = W.VBox([top_row, output_card], layout=W.Layout(width="100%", gap="10px"))
