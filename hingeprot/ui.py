@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import datetime
 import base64
 import uuid
@@ -239,6 +240,10 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             return py3Dmol
 
     def _html_with_unique_divid(raw_html: str) -> str:
+        """
+        py3Dmol'un ürettiği HTML içindeki ilk div id'sini bulup
+        tüm referanslarda benzersiz bir id ile değiştirir.
+        """
         m = re.search(r'id="([^"]+)"', raw_html)
         if not m:
             return raw_html
@@ -247,45 +252,38 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         return raw_html.replace(old, new)
 
     # ---------- UI ----------
-
     css = W.HTML(r"""
     <style>
-      .hp-card {border:1px solid #e5e7eb; border-radius:14px; padding:14px 16px; margin:10px 0; background:#fff;}
-      .hp-header-wrap{
-        border:1px solid #e5e7eb;
-        border-radius:16px;
-        padding:12px 18px;
-        margin:10px 0 8px 0;
-        background:#fff;
-        box-shadow: 0 1px 0 rgba(0,0,0,0.03);
-        text-align:center;
-      }
-      .hp-logo{ max-height:78px; height:auto; display:block; margin: 0 auto 6px auto; }
-      .hp-subtitle{ font-size:16px; font-weight:800; color:#111827; font-family: Arial, Helvetica, sans-serif; margin-top:6px; line-height:1.2; }
-
-      /* simple page content */
-      .hp-page{
-        border:1px solid #e5e7eb;
-        border-radius:14px;
-        padding:14px 16px;
-        background:#fff;
-        line-height:1.5;
-        font-family: Arial, Helvetica, sans-serif;
-        color:#111827;
-      }
-      .hp-page h2{ margin: 6px 0 10px 0; }
-      .hp-page img{ max-width: 920px; width: 100%; border-radius: 12px; border:1px solid #e5e7eb; margin: 10px 0; }
-
-      .hp-pre{
-        white-space:pre-wrap;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-        font-size: 13px; line-height: 1.35;
-        background:#0b1020; color:#e5e7eb;
-        padding:12px; border-radius:12px; border:1px solid #1f2937;
-      }
+    .hp-card {border:1px solid #e5e7eb; border-radius:14px; padding:14px 16px; margin:10px 0; background:#fff;}
+    .hp-header-wrap{
+      border:1px solid #e5e7eb;
+      border-radius:16px;
+      padding:12px 18px;
+      margin:10px 0 12px 0;
+      background:#fff;
+      box-shadow: 0 1px 0 rgba(0,0,0,0.03);
+      text-align:center;
+    }
+    .hp-logo{
+      max-height:78px;
+      height:auto;
+      display:block;
+      margin: 0 auto 6px auto;
+    }
+    .hp-subtitle{
+      font-size:16px;
+      font-weight:800;
+      color:#111827;
+      font-family: Arial, Helvetica, sans-serif;
+      margin-top:6px;
+      line-height:1.2;
+    }
+    .hp-pre{ white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+             font-size: 13px; line-height: 1.35; background:#0b1020; color:#e5e7eb; padding:12px; border-radius:12px; border:1px solid #1f2937;}
     </style>
     """)
 
+    # --- NEW header: logo + subtitle ---
     logo_url = "https://raw.githubusercontent.com/enesemretas/hingeprot_fortran/main/assets/logo.gif"
     header = W.HTML(f"""
     <div class="hp-header-wrap">
@@ -294,14 +292,11 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     </div>
     """)
 
-    # --- bold Input label + remove empty frame issue ---
-    input_label = W.HTML("<b>Input:</b>")
-
     input_mode = W.ToggleButtons(
         options=[("Enter PDB code", "code"), ("Upload PDB file", "upload")],
         value="code",
-        description="",  # <- artık label ile veriyoruz
-        style={"button_width": "170px"},
+        description="Input:",
+        style={"description_width": "60px", "button_width": "170px"},
         layout=W.Layout(width="420px"),
     )
 
@@ -319,7 +314,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     file_lbl = W.Label("No file chosen")
 
     code_box = W.HBox([pdb_code], layout=W.Layout(align_items="center"))
-    upload_box = W.HBox([btn_choose_file, upload_prog, file_lbl], layout=W.Layout(align_items="center", gap="10px"))
+    upload_box = W.HBox([btn_choose_file, upload_prog, file_lbl],
+                        layout=W.Layout(align_items="center", gap="10px"))
 
     btn_load = W.Button(description="Load / Detect Chains", button_style="info", icon="search", layout=W.Layout(width="260px"))
 
@@ -361,9 +357,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     def _set_status(text: str):
         status_box.value = f'<div class="hp-pre">{_safe_html(text)}</div>'
 
-    # ---------- viewer ----------
+    # ---------- viewer (SHORTER) ----------
     VIEW_W = 560
-    VIEW_H = 280
+    VIEW_H = 280  # <-- 360'tan düşürüldü: Run butonuna kadar daha iyi hizalanır
 
     viewer_out = W.Output(
         layout=W.Layout(
@@ -447,19 +443,29 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
         detected = state.get("detected_chains", [])
         if detected:
-            selected = list(detected) if all_chains.value else _selected_chains()
+            if all_chains.value:
+                selected = list(detected)
+            else:
+                selected = _selected_chains()
         else:
             selected = []
 
         v = py3Dmol.view(width=VIEW_W, height=VIEW_H)
         v.addModel(pdb_text, "pdb")
         v.setBackgroundColor("white")
+
+        # base: grey
         v.setStyle({}, {"cartoon": {"color": "lightgray"}})
+
+        # selected: red
         for ch in selected:
             v.setStyle({"chain": ch}, {"cartoon": {"color": "red"}})
+
         v.zoomTo()
 
-        raw = _html_with_unique_divid(v._make_html())
+        raw = v._make_html()
+        raw = _html_with_unique_divid(raw)
+
         with viewer_out:
             clear_output(wait=True)
             display(HTML(raw))
@@ -757,6 +763,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
             state["last_out_dir"] = dest_out_dir
 
+            # ensure requested filename exists (alias)
             src_hinge = os.path.join(dest_out_dir, f"{pdb_filename}.hinge")
             alias_hinges = os.path.join(dest_out_dir, f"{pdb_filename}.new.hinges")
             if os.path.exists(src_hinge) and not os.path.exists(alias_hinges):
@@ -816,124 +823,30 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         _set_status("Cleared. Load a PDB to detect chains.")
         _viewer_placeholder()
 
-    # Buttons
     btn_load.on_click(on_load_clicked)
     btn_run_fortran.on_click(on_run_fortran_clicked)
     btn_clear.on_click(on_clear_clicked)
 
-    # ---------- Layout cards (NO fake HTML wrapper) ----------
-    form_card = W.VBox(
-        [
-            input_label,
-            input_mode,
-            code_box,
-            upload_box,
-            btn_load,
-            W.HTML("<hr>"),
-            chain_row,
-            W.VBox([gnm_row, anm_row], layout=W.Layout(gap="8px")),
-            progress,
-            W.HBox([btn_run_fortran, btn_clear]),
-        ],
-        layout=W.Layout(
-            width="620px",
-            border="1px solid #e5e7eb",
-            border_radius="14px",
-            padding="14px 16px",
-        ),
-    )
+    form_card = W.VBox([
+        W.HTML('<div class="hp-card">'),
+        input_mode,
+        code_box,
+        upload_box,
+        btn_load,
+        W.HTML("<hr>"),
+        chain_row,
+        W.VBox([gnm_row, anm_row], layout=W.Layout(gap="8px")),
+        progress,
+        W.HBox([btn_run_fortran, btn_clear]),
+        W.HTML("</div>"),
+    ], layout=W.Layout(width="620px"))
 
-    output_card = W.VBox(
-        [
-            W.HTML("<b>Hinges Output</b>"),
-            status_box,
-        ],
-        layout=W.Layout(
-            border="1px solid #e5e7eb",
-            border_radius="14px",
-            padding="14px 16px",
-            margin="10px 0 0 0",
-        ),
-    )
+    output_card = W.VBox([
+        W.HTML('<div class="hp-card"><b>Hinges Output</b></div>'),
+        status_box,
+    ])
 
     top_row = W.HBox([form_card, viewer_card], layout=W.Layout(align_items="flex-start", gap="14px"))
 
-    # ---------- Tabs content ----------
-    web_server_panel = W.VBox([top_row, output_card], layout=W.Layout(width="100%"))
-
-    about_html = W.HTML(f"""
-    <div class="hp-page">
-      <h2>About HingeProt</h2>
-      <p>
-        HingeProt is an elastic network model (ENM)-based approach for detecting protein hinge regions
-        and large-scale collective motions.
-      </p>
-      <img src="{logo_url}" alt="HINGEprot logo" />
-      <p>
-        This Colab UI provides:
-        <ul>
-          <li>PDB input via code or file upload</li>
-          <li>Chain selection with live 3D preview</li>
-          <li>Fortran runner integration (part1/useblz/part2/processHinges)</li>
-        </ul>
-      </p>
-      <p style="opacity:0.8;">
-        (You can replace this text and add additional figures/screenshots by editing <code>about_html</code>.)
-      </p>
-    </div>
-    """)
-
-    help_html = W.HTML(f"""
-    <div class="hp-page">
-      <h2>Help</h2>
-      <ol>
-        <li><b>Web Server</b> sekmesinde <b>Input</b> bölümünden PDB code girin veya PDB dosyası yükleyin.</li>
-        <li><b>Load / Detect Chains</b> ile chain'leri tespit edin.</li>
-        <li>İsterseniz <b>All Chains</b> veya tekil chain seçin (seçilenler kırmızı).</li>
-        <li>GNM/ANM cutoff değerlerini ayarlayın.</li>
-        <li><b>Run HingeProt (Fortran)</b> ile çalıştırın; çıktı <b>Hinges Output</b> kısmına düşer.</li>
-      </ol>
-
-      <h3>Troubleshooting</h3>
-      <ul>
-        <li><b>Viewer boş kalırsa:</b> önce “Load / Detect Chains” çalıştığından emin olun.</li>
-        <li><b>libg2c hatası:</b> runner otomatik kurmayı deniyor; yine de hata olursa RuntimeError mesajını kopyalayın.</li>
-        <li><b>Chain görünmüyor:</b> PDB’de chain ID boş olabilir; farklı PDB ile test edin.</li>
-      </ul>
-      <img src="{logo_url}" alt="HINGEprot logo" />
-    </div>
-    """)
-
-    refs_html = W.HTML("""
-    <div class="hp-page">
-      <h2>References</h2>
-      <ul>
-        <li><b>Elastic Network Models (ENM):</b> Protein kolektif hareketlerini basitleştirilmiş ağ modelleriyle yakalama yaklaşımı.</li>
-        <li><b>GNM / ANM:</b> Gaussian Network Model ve Anisotropic Network Model, ENM ailesinin yaygın iki formu.</li>
-        <li><b>Hinge detection:</b> Büyük ölçekli hareketleri mümkün kılan eklem/hinge bölgelerinin belirlenmesi.</li>
-      </ul>
-      <p style="opacity:0.8;">
-        Buraya makale künyelerinizi/DOI’lerinizi ekleyebiliriz. İsterseniz siz bana referans listesini atın,
-        ben bunu düzgün formatta (APA/ACS vb.) sayfaya yerleştireyim.
-      </p>
-    </div>
-    """)
-
-    about_panel = W.VBox([about_html], layout=W.Layout(width="100%"))
-    help_panel = W.VBox([help_html], layout=W.Layout(width="100%"))
-    refs_panel = W.VBox([refs_html], layout=W.Layout(width="100%"))
-
-    tabs = W.Tab(children=[web_server_panel, about_panel, help_panel, refs_panel])
-    tabs.set_title(0, "Web Server")
-    tabs.set_title(1, "About HingeProt")
-    tabs.set_title(2, "Help")
-    tabs.set_title(3, "References")
-
-    # ---------- display ----------
-    # Tek bir widget olarak bas: Colab'da daha stabil
-    tabs.selected_index = 0  # ilk sekme garanti açılsın
-    app = W.VBox([css, header, tabs], layout=W.Layout(width="100%"))
-    display(app)
+    display(css, header, top_row, output_card)
     return None
-
-
