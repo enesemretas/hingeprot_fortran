@@ -376,7 +376,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     anm_row, get_anm_cut = _list_or_custom_float("ANM cutoff (Å):", [10, 13, 15, 18, 20, 23, 36], 18.0, 1.0, 100.0)
 
     progress = W.IntProgress(value=0, min=0, max=4, description="Progress:", bar_style="")
-    btn_run_fortran = W.Button(description="Run HingeProt (Fortran)", button_style="primary", icon="play", layout=W.Layout(width="320px"))
+    btn_run_fortran = W.Button(description="Run HingeProt", button_style="primary", icon="play", layout=W.Layout(width="320px"))
     btn_clear = W.Button(description="Clear", button_style="warning", icon="trash", layout=W.Layout(width="180px"))
 
     status_box = W.HTML('<div class="hp-pre">Load a PDB to detect chains.</div>')
