@@ -263,9 +263,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       background:#fff;
       box-shadow: 0 1px 0 rgba(0,0,0,0.03);
       display:flex;
-      align-items:center;
-      gap:18px;
-      flex-wrap:wrap;
+      flex-direction:column;
+      align-items:flex-start;
+      gap:10px;
     }
     .hp-brand{
       display:flex;
@@ -313,9 +313,10 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         style={"button_width": "140px"},
     )
 
-    header_bar = W.HBox(
+    # Nav: subtitle'ın ALTINDA
+    header_bar = W.VBox(
         [brand, nav],
-        layout=W.Layout(width="100%", align_items="center", justify_content="flex-start", gap="16px"),
+        layout=W.Layout(width="100%", align_items="flex-start", justify_content="flex-start", gap="8px"),
     )
     header_bar.add_class("hp-headerbar")
 
@@ -384,13 +385,16 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     def _set_status(text: str):
         status_box.value = f'<div class="hp-pre">{_safe_html(text)}</div>'
 
-    # ---------- viewer (SHORTER) ----------
-    VIEW_W = 560
+    # ---------- viewer (boxed like form; same width) ----------
+    CARD_W = 620
+    INNER_W = CARD_W - 32  # hp-card padding left+right = 16+16
+
+    VIEW_W = INNER_W  # py3Dmol width
     VIEW_H = 280
 
     viewer_out = W.Output(
         layout=W.Layout(
-            width=f"{VIEW_W}px",
+            width="100%",
             height=f"{VIEW_H}px",
             border="1px solid #e5e7eb",
             border_radius="12px",
@@ -399,7 +403,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         )
     )
     viewer_title = W.HTML('<div style="font-weight:800; margin:2px 0 8px 2px;">3D Viewer</div>')
-    viewer_card = W.VBox([viewer_title, viewer_out], layout=W.Layout(width=f"{VIEW_W}px"))
+
+    viewer_card = W.VBox([viewer_title, viewer_out], layout=W.Layout(width=f"{CARD_W}px", gap="10px"))
+    viewer_card.add_class("hp-card")
 
     def _viewer_placeholder(msg: str = "Load a PDB to preview it here."):
         with viewer_out:
@@ -852,7 +858,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     btn_run_fortran.on_click(on_run_fortran_clicked)
     btn_clear.on_click(on_clear_clicked)
 
-    # --------- CARDS (no fake HTML wrapper; prevents empty box) ---------
+    # --------- CARDS (same width) ---------
     form_card = W.VBox([
         input_mode,
         code_box,
@@ -863,14 +869,23 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         W.VBox([gnm_row, anm_row], layout=W.Layout(gap="8px")),
         progress,
         W.HBox([btn_run_fortran, btn_clear]),
-    ], layout=W.Layout(width="620px", gap="10px"))
+    ], layout=W.Layout(width=f"{CARD_W}px", gap="10px"))
     form_card.add_class("hp-card")
 
     output_title = W.HTML("<b>Hinges Output</b>")
     output_card = W.VBox([output_title, status_box], layout=W.Layout(width="100%", gap="8px"))
     output_card.add_class("hp-card")
 
-    top_row = W.HBox([form_card, viewer_card], layout=W.Layout(align_items="flex-start", gap="14px"))
+    # wrap: dar ekranda alt alta düşsün
+    top_row = W.HBox(
+        [form_card, viewer_card],
+        layout=W.Layout(
+            display="flex",
+            flex_flow="row wrap",
+            align_items="flex-start",
+            gap="14px",
+        ),
+    )
     web_page = W.VBox([top_row, output_card], layout=W.Layout(width="100%", gap="10px"))
 
     about_text = """Motivation:
@@ -885,7 +900,7 @@ One of the most interesting examples is calmodulin. Upon binding to its ligands,
 
     main_view = W.VBox([web_page], layout=W.Layout(width="100%"))
 
-    def _switch_page(ch):
+    def _switch_page(_):
         key = nav.value
         if key == "web":
             main_view.children = [web_page]
@@ -899,8 +914,6 @@ One of the most interesting examples is calmodulin. Upon binding to its ligands,
             main_view.children = [web_page]
 
     nav.observe(_switch_page, names="value")
-
-    # initial
     _switch_page(None)
 
     display(css, header_bar, main_view)
