@@ -255,42 +255,69 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     css = W.HTML(r"""
     <style>
     .hp-card {border:1px solid #e5e7eb; border-radius:14px; padding:14px 16px; margin:10px 0; background:#fff;}
-    .hp-header-wrap{
+    .hp-headerbar{
       border:1px solid #e5e7eb;
       border-radius:16px;
       padding:12px 18px;
       margin:10px 0 12px 0;
       background:#fff;
       box-shadow: 0 1px 0 rgba(0,0,0,0.03);
-      text-align:center;
+      display:flex;
+      align-items:center;
+      gap:18px;
+      flex-wrap:wrap;
+    }
+    .hp-brand{
+      display:flex;
+      flex-direction:column;
+      align-items:flex-start;
     }
     .hp-logo{
       max-height:78px;
       height:auto;
       display:block;
-      margin: 0 auto 6px auto;
+      margin: 0 0 6px 0;
     }
     .hp-subtitle{
       font-size:16px;
       font-weight:800;
       color:#111827;
       font-family: Arial, Helvetica, sans-serif;
-      margin-top:6px;
+      margin-top:0px;
       line-height:1.2;
+      text-align:left;
     }
     .hp-pre{ white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
              font-size: 13px; line-height: 1.35; background:#0b1020; color:#e5e7eb; padding:12px; border-radius:12px; border:1px solid #1f2937;}
     </style>
     """)
 
-    # --- NEW header: logo + subtitle ---
     logo_url = "https://raw.githubusercontent.com/enesemretas/hingeprot_fortran/main/assets/logo.gif"
-    header = W.HTML(f"""
-    <div class="hp-header-wrap">
+
+    brand = W.HTML(f"""
+    <div class="hp-brand">
       <img class="hp-logo" src="{logo_url}" alt="HINGEprot logo">
       <div class="hp-subtitle">An Algorithm For Protein Hinge Prediction Using Elastic Network Models</div>
     </div>
     """)
+
+    nav = W.ToggleButtons(
+        options=[
+            ("Web Server", "web"),
+            ("About HingeProt", "about"),
+            ("Help", "help"),
+            ("References", "refs"),
+        ],
+        value="web",
+        layout=W.Layout(width="auto"),
+        style={"button_width": "140px"},
+    )
+
+    header_bar = W.HBox(
+        [brand, nav],
+        layout=W.Layout(width="100%", align_items="center", justify_content="flex-start", gap="16px"),
+    )
+    header_bar.add_class("hp-headerbar")
 
     input_mode = W.ToggleButtons(
         options=[("Enter PDB code", "code"), ("Upload PDB file", "upload")],
@@ -359,7 +386,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
     # ---------- viewer (SHORTER) ----------
     VIEW_W = 560
-    VIEW_H = 280  # <-- 360'tan düşürüldü: Run butonuna kadar daha iyi hizalanır
+    VIEW_H = 280
 
     viewer_out = W.Output(
         layout=W.Layout(
@@ -454,10 +481,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         v.addModel(pdb_text, "pdb")
         v.setBackgroundColor("white")
 
-        # base: grey
         v.setStyle({}, {"cartoon": {"color": "lightgray"}})
 
-        # selected: red
         for ch in selected:
             v.setStyle({"chain": ch}, {"cartoon": {"color": "red"}})
 
@@ -827,8 +852,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     btn_run_fortran.on_click(on_run_fortran_clicked)
     btn_clear.on_click(on_clear_clicked)
 
+    # --------- CARDS (no fake HTML wrapper; prevents empty box) ---------
     form_card = W.VBox([
-        W.HTML('<div class="hp-card">'),
         input_mode,
         code_box,
         upload_box,
@@ -838,15 +863,45 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         W.VBox([gnm_row, anm_row], layout=W.Layout(gap="8px")),
         progress,
         W.HBox([btn_run_fortran, btn_clear]),
-        W.HTML("</div>"),
-    ], layout=W.Layout(width="620px"))
+    ], layout=W.Layout(width="620px", gap="10px"))
+    form_card.add_class("hp-card")
 
-    output_card = W.VBox([
-        W.HTML('<div class="hp-card"><b>Hinges Output</b></div>'),
-        status_box,
-    ])
+    output_title = W.HTML("<b>Hinges Output</b>")
+    output_card = W.VBox([output_title, status_box], layout=W.Layout(width="100%", gap="8px"))
+    output_card.add_class("hp-card")
 
     top_row = W.HBox([form_card, viewer_card], layout=W.Layout(align_items="flex-start", gap="14px"))
+    web_page = W.VBox([top_row, output_card], layout=W.Layout(width="100%", gap="10px"))
 
-    display(css, header, top_row, output_card)
+    about_text = """Motivation:
+
+Proteins are highly flexible molecules. It is common to classify protein motions into shear and hinge motion [1]. Shear motions are very limited and involve large number of residues. On the other hand, hinge motions are similar to rotations around an articulated joint and therefore can be very large. Hinge motion is characterized by large changes in main-chain torsional angles occurring at a localized region, which is called a hinge. Hinge motions usually involve a small number of residues, since even one bond can provide the required rotational freedom. This kind of protein motion is free of packing constraints. When a chain exhibits hinge motion at the region connecting two structural domains, each domain behaves as a rigid body and packing interactions can appear/disappear between the interfaces of those rigid bodies. Hinge motions usually occur upon binding to another molecule, or upon activation/deactivation of the protein.
+
+One of the most interesting examples is calmodulin. Upon binding to its ligands, there is large-scale movement of calmodulin involving splitting of one long helix. The total rotation of one domain relative to the other is upwards of 150 degrees (see images below and try the server for PDB codes 4cln and 2bbm, chainA)."""
+
+    about_page = W.HTML(f"<div style='white-space:pre-wrap;'>{_safe_html(about_text)}</div>")
+    help_page = W.HTML("<div></div>")
+    refs_page = W.HTML("<div></div>")
+
+    main_view = W.VBox([web_page], layout=W.Layout(width="100%"))
+
+    def _switch_page(ch):
+        key = nav.value
+        if key == "web":
+            main_view.children = [web_page]
+        elif key == "about":
+            main_view.children = [about_page]
+        elif key == "help":
+            main_view.children = [help_page]
+        elif key == "refs":
+            main_view.children = [refs_page]
+        else:
+            main_view.children = [web_page]
+
+    nav.observe(_switch_page, names="value")
+
+    # initial
+    _switch_page(None)
+
+    display(css, header_bar, main_view)
     return None
