@@ -303,7 +303,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     pdb_code = W.Text(
         value="",
         description="PDB code:",
-        placeholder="e.g., 3lzg",
+        placeholder="e.g., 4cln",
         style={"description_width": "80px"},
         layout=W.Layout(width="420px"),
     )
