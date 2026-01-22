@@ -152,13 +152,13 @@ def _read_text_file(path: str, max_lines: int = 900) -> str:
         lines = head + ["", "[... truncated ...]", ""] + tail
     return "\n".join(lines)
 
-    def _read_optional_file(path: str) -> str:
-        try:
-            if os.path.exists(path) and os.path.getsize(path) > 0:
-                return _read_text_file(path, max_lines=20000)
-        except Exception:
-            pass
-        return ""
+def _read_optional_file(path: str) -> str:
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return _read_text_file(path, max_lines=20000)
+    except Exception:
+        pass
+    return ""
 
 
 def _find_hinges_file(out_dir: str, pdb_filename: str) -> str | None:
@@ -1262,8 +1262,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
     about_page = W.HTML(about_html, layout=W.Layout(width="100%"))
    
-        # ---------- References tab content (reads citations.txt next to ui.py) ----------
-    CITATIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "citations.txt")
+    # ---------- References tab content (reads citations.txt next to ui.py) ----------
+    base_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+    CITATIONS_PATH = os.path.join(base_dir, "citations.txt")
     citations_text = _read_optional_file(CITATIONS_PATH)
 
     note_html = ""
