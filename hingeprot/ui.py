@@ -1026,13 +1026,20 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     img_4cln = "https://raw.githubusercontent.com/enesemretas/hingeprot_fortran/main/assets/4cln.jpg"
     img_2bbm = "https://raw.githubusercontent.com/enesemretas/hingeprot_fortran/main/assets/2bbm.jpg"
 
+    # Reference links (open in new tab)
+    ref1_url = "https://pubs.acs.org/doi/10.1021/bi00188a001"
+    ref2_url = "https://pubmed.ncbi.nlm.nih.gov/9218955/"
+    ref3_url = "https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.79.3090"
+    ref4_url = "https://www.sciencedirect.com/science/article/pii/S000634950176033X"
+    article_url = "https://pubmed.ncbi.nlm.nih.gov/17847101/"
+
     about_html = f"""
     <div class="hp-about">
       <h2>Motivation:</h2>
 
       <p>
         Proteins are highly flexible molecules. It is common to classify protein motions into shear and hinge motion
-        <a class="hp-ref" href="https://pubs.acs.org/doi/10.1021/bi00188a001">[1]</a>.
+        <a class="hp-ref" href="{ref1_url}" target="_blank" rel="noopener noreferrer">[1]</a>.
         Shear motions are very limited and involve large number of residues. On the other hand, hinge motions are
         similar to rotations around an articulated joint and therefore can be very large. Hinge motion is characterized
         by large changes in main-chain torsional angles occurring at a localized region, which is called a hinge.
@@ -1063,9 +1070,10 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         <i>HingeProt</i> is a web server for predicting rigid protein parts and the flexible hinge regions connecting them
         in the native topology of protein chains by employing elastic network (EN) models.
         <i>HingeProt</i> makes use of both Gaussian Network Model (GNM)
-        <a class="hp-ref" href="#ref2">[2]</a>, <a class="hp-ref" href="#ref3">[3]</a>
+        <a class="hp-ref" href="{ref2_url}" target="_blank" rel="noopener noreferrer">[2]</a>,
+        <a class="hp-ref" href="{ref3_url}" target="_blank" rel="noopener noreferrer">[3]</a>
         and Anisotropic Network models (ANM)
-        <a class="hp-ref" href="#ref4">[4]</a>.
+        <a class="hp-ref" href="{ref4_url}" target="_blank" rel="noopener noreferrer">[4]</a>.
       </p>
 
       <p>
@@ -1093,12 +1101,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       <h3>Method:</h3>
 
       <p>
-        GNM <a class="hp-ref" href="#ref2">[2]</a>, <a class="hp-ref" href="#ref3">[3]</a> and its extension ANM
-        <a class="hp-ref" href="#ref4">[4]</a> are coarse-grained residue level elastic network models. GNM predicts the
-        relative magnitudes of the fluctuations, whereas ANM predicts the directionalities of the collective motions in
-        addition to their magnitudes. GNM results are more robust, and thus are preferentially used for evaluating square
-        displacements in low frequency modes <a class="hp-ref" href="#ref4">[4]</a>. Here GNM is used to calculate
-        mean-square fluctuations and correlation between the fluctuations of residues, and ANM to generate the
+        GNM <a class="hp-ref" href="{ref2_url}" target="_blank" rel="noopener noreferrer">[2]</a>,
+        <a class="hp-ref" href="{ref3_url}" target="_blank" rel="noopener noreferrer">[3]</a> and its extension ANM
+        <a class="hp-ref" href="{ref4_url}" target="_blank" rel="noopener noreferrer">[4]</a> are coarse-grained residue
+        level elastic network models. GNM predicts the relative magnitudes of the fluctuations, whereas ANM predicts the
+        directionalities of the collective motions in addition to their magnitudes. GNM results are more robust, and thus
+        are preferentially used for evaluating square displacements in low frequency modes
+        <a class="hp-ref" href="{ref4_url}" target="_blank" rel="noopener noreferrer">[4]</a>. Here GNM is used to
+        calculate mean-square fluctuations and correlation between the fluctuations of residues, and ANM to generate the
         conformations that describe the fluctuations of residues from the average, X-ray, structure in the principal
         directions of motion.
       </p>
@@ -1123,28 +1133,29 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       </p>
 
       <p>
-        For more detailed background of the work see the article.
+        For more detailed background of the work see the
+        <a class="hp-ref" href="{article_url}" target="_blank" rel="noopener noreferrer">article</a>.
       </p>
 
       <div class="hp-refs">
         <h3 style="margin-top:10px;">References :</h3>
         <ol>
           <li id="ref1">
-            <span class="hp-ref">[1]</span>
+            <a class="hp-ref" href="{ref1_url}" target="_blank" rel="noopener noreferrer">[1]</a>
             Gerstein M, Lesk A. M. Lesk, Chothia C. (1994) Structural Mechanisms for Domain Movements in Proteins,
             Biochemistry 33(22), 6739-6749
           </li>
           <li id="ref2">
-            <span class="hp-ref">[2]</span>
+            <a class="hp-ref" href="{ref2_url}" target="_blank" rel="noopener noreferrer">[2]</a>
             Bahar, I., Atilgan A. R., Erman, B. (1997) Direct evaluation of thermal fluctuations in proteins using a
             single-parameter harmonic potential. Folding and Design, 2, 173-181.
           </li>
           <li id="ref3">
-            <span class="hp-ref">[3]</span>
+            <a class="hp-ref" href="{ref3_url}" target="_blank" rel="noopener noreferrer">[3]</a>
             Haliloglu, T., Bahar I, Erman B. (1997) Gaussian Dynamics of Proteins, Physical review letters, 79, 3090-3093
           </li>
           <li id="ref4">
-            <span class="hp-ref">[4]</span>
+            <a class="hp-ref" href="{ref4_url}" target="_blank" rel="noopener noreferrer">[4]</a>
             Atilgan, A. R., Durell, A. R., Jernigan, R. L., Demirel, M. C., Keskin, O., Bahar, I. (2001),
             Anisotropy of fluctuation dynamics of proteins with an elastic network model. Biophysical Journal, 80, 505-515
           </li>
@@ -1152,6 +1163,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       </div>
     </div>
     """
+
 
     about_page = W.HTML(about_html)
 
