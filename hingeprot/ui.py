@@ -238,7 +238,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 raise RuntimeError("py3Dmol install failed. Try: !pip -q install py3Dmol")
             import py3Dmol  # type: ignore
             return py3Dmol
-            
+
     def _html_with_unique_divid(raw_html: str) -> str:
         """
         py3Dmol'un ürettiği HTML içindeki ilk div id'sini bulup
@@ -250,41 +250,45 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         old = m.group(1)
         new = f"hp3d_{uuid.uuid4().hex}"
         return raw_html.replace(old, new)
-        
+
     # ---------- UI ----------
     css = W.HTML(r"""
     <style>
     .hp-card {border:1px solid #e5e7eb; border-radius:14px; padding:14px 16px; margin:10px 0; background:#fff;}
-    .hp-banner{
+    .hp-header-wrap{
       border:1px solid #e5e7eb;
       border-radius:16px;
-      padding:14px 18px;
+      padding:12px 18px;
       margin:10px 0 12px 0;
       background:#fff;
-      display:flex;
-      align-items:center;
-      gap:16px;
       box-shadow: 0 1px 0 rgba(0,0,0,0.03);
+      text-align:center;
     }
-    .hp-dot{ width:14px; height:14px; background:#ef4444; border-radius:999px; }
-    .hp-title{ font-size:34px; font-weight:900; letter-spacing:0.5px; line-height: 1.0; margin:0;
-               color:#111827; font-family: Arial, Helvetica, sans-serif; }
-    .hp-title .prot{ color:#ef4444; }
-    .hp-underline{ height:3px; width:280px; background:#111827; margin-top:6px; border-radius:999px; opacity:0.9; }
-    .hp-tagline{ margin-top:6px; font-size:16px; font-weight:800; color:#dc2626; font-family: Arial, Helvetica, sans-serif; }
+    .hp-logo{
+      max-height:78px;
+      height:auto;
+      display:block;
+      margin: 0 auto 6px auto;
+    }
+    .hp-subtitle{
+      font-size:16px;
+      font-weight:800;
+      color:#111827;
+      font-family: Arial, Helvetica, sans-serif;
+      margin-top:6px;
+      line-height:1.2;
+    }
     .hp-pre{ white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
              font-size: 13px; line-height: 1.35; background:#0b1020; color:#e5e7eb; padding:12px; border-radius:12px; border:1px solid #1f2937;}
     </style>
     """)
 
-    header = W.HTML(r"""
-    <div class="hp-banner">
-      <div class="hp-dot"></div>
-      <div>
-        <div class="hp-title">HINGE<span class="prot">prot</span></div>
-        <div class="hp-underline"></div>
-        <div class="hp-tagline">Colab UI + Fortran Runner (simple chain coloring)</div>
-      </div>
+    # --- NEW header: logo + subtitle ---
+    logo_url = "https://raw.githubusercontent.com/enesemretas/hingeprot_fortran/main/assets/logo.gif"
+    header = W.HTML(f"""
+    <div class="hp-header-wrap">
+      <img class="hp-logo" src="{logo_url}" alt="HINGEprot logo">
+      <div class="hp-subtitle">An Algorithm For Protein Hinge Prediction Using Elastic Network Models</div>
     </div>
     """)
 
@@ -353,19 +357,22 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     def _set_status(text: str):
         status_box.value = f'<div class="hp-pre">{_safe_html(text)}</div>'
 
-    # ---------- viewer ----------
+    # ---------- viewer (SHORTER) ----------
+    VIEW_W = 560
+    VIEW_H = 280  # <-- 360'tan düşürüldü: Run butonuna kadar daha iyi hizalanır
+
     viewer_out = W.Output(
         layout=W.Layout(
-            width="560px",
-            height="360px",
+            width=f"{VIEW_W}px",
+            height=f"{VIEW_H}px",
             border="1px solid #e5e7eb",
             border_radius="12px",
             padding="6px",
             overflow="hidden"
         )
     )
-    viewer_title = W.HTML('<div class="hp-card"><b>3D Viewer</b></div>')
-    viewer_card = W.VBox([viewer_title, viewer_out], layout=W.Layout(width="560px"))
+    viewer_title = W.HTML('<div style="font-weight:800; margin:2px 0 8px 2px;">3D Viewer</div>')
+    viewer_card = W.VBox([viewer_title, viewer_out], layout=W.Layout(width=f"{VIEW_W}px"))
 
     def _viewer_placeholder(msg: str = "Load a PDB to preview it here."):
         with viewer_out:
@@ -443,7 +450,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         else:
             selected = []
 
-        v = py3Dmol.view(width=560, height=360)
+        v = py3Dmol.view(width=VIEW_W, height=VIEW_H)
         v.addModel(pdb_text, "pdb")
         v.setBackgroundColor("white")
 
@@ -462,7 +469,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         with viewer_out:
             clear_output(wait=True)
             display(HTML(raw))
-
 
     # ---------- input visibility ----------
     def _sync_input_visibility(*_):
