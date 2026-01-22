@@ -1032,7 +1032,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
       <p>
         Proteins are highly flexible molecules. It is common to classify protein motions into shear and hinge motion
-        <a class="hp-ref" href="#ref1">[1]</a>.
+        <a class="hp-ref" href="https://pubs.acs.org/doi/10.1021/bi00188a001">[1]</a>.
         Shear motions are very limited and involve large number of residues. On the other hand, hinge motions are
         similar to rotations around an articulated joint and therefore can be very large. Hinge motion is characterized
         by large changes in main-chain torsional angles occurring at a localized region, which is called a hinge.
