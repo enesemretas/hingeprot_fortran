@@ -152,6 +152,14 @@ def _read_text_file(path: str, max_lines: int = 900) -> str:
         lines = head + ["", "[... truncated ...]", ""] + tail
     return "\n".join(lines)
 
+    def _read_optional_file(path: str) -> str:
+        try:
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                return _read_text_file(path, max_lines=20000)
+        except Exception:
+            pass
+        return ""
+
 
 def _find_hinges_file(out_dir: str, pdb_filename: str) -> str | None:
     candidates = [
@@ -197,6 +205,44 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
     def _safe_html(text: str) -> str:
         return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+ 
+    def _linkify_citation_line(line: str) -> str:
+        """
+        Citation satırı içinde geçen URL / DOI / PubMed PMID'leri tıklanabilir yapar.
+        DİKKAT: Bu fonksiyon HTML döndürür (li içine direkt konacak).
+        """
+        s = (line or "").strip()
+        if not s:
+            return ""
+
+        # Önce HTML escape (güvenlik)
+        s = _safe_html(s)
+
+        # 1) URL'leri link yap (http/https)
+        # escaped string içinde URL zaten düz kalır, sadece < > & yok.
+        url_pat = re.compile(r"(https?://[^\s<]+)")
+        s = url_pat.sub(r'<a href="\1" target="_blank" rel="noopener noreferrer">\1</a>', s)
+
+        # 2) DOI yakala (DOI: 10.... veya düz 10....)
+        # Basit ama pratik: 10.<digits>/<stuff>
+        doi_pat = re.compile(r"\b(DOI:\s*)?(10\.\d{4,9}/[^\s;,]+)\b", re.IGNORECASE)
+        def _doi_repl(m):
+            prefix = m.group(1) or ""
+            doi = m.group(2)
+            # DOI linki
+            url = f"https://doi.org/{doi}"
+            # prefix (DOI:) görünür kalsın
+            return f'{prefix}<a href="{url}" target="_blank" rel="noopener noreferrer">{doi}</a>'
+        s = doi_pat.sub(_doi_repl, s)
+
+        # 3) PubMed / PMID yakala (PMID: 12345678 ya da sadece PMID 12345678)
+        pmid_pat = re.compile(r"\bPMID[:\s]+(\d{5,10})\b", re.IGNORECASE)
+        s = pmid_pat.sub(
+            r'PMID: <a href="https://pubmed.ncbi.nlm.nih.gov/\1/" target="_blank" rel="noopener noreferrer">\1</a>',
+            s,
+        )
+
+        return s
 
     def _list_or_custom_float(label: str, options, default_value: float, minv: float, maxv: float):
         opts = [float(x) for x in options]
@@ -377,6 +423,54 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     }
     .hp-about .hp-refs li{
       margin: 6px 0;
+    }
+
+    /* ---------- NEW: References page style (screenshot-like) ---------- */
+    .hp-refpage{
+      font-family: Arial, Helvetica, sans-serif;
+      width: 100%;
+      color:#111827;
+    }
+    .hp-refpage h2{
+      margin: 0 0 8px 0;
+      font-size: 28px;
+      font-weight: 900;
+      color: #1d4ed8;
+    }
+    .hp-refpage .sub{
+      margin: 0 0 10px 0;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .hp-refpage .cite-main{
+      margin: 0 0 16px 0;
+      font-size: 14px;
+    }
+    .hp-refpage h3{
+      margin: 14px 0 8px 0;
+      font-size: 22px;
+      font-weight: 900;
+      color: #1d4ed8;
+    }
+    .hp-refpage ul{
+      margin: 8px 0 0 22px;
+      padding: 0;
+    }
+    .hp-refpage li{
+      margin: 6px 0;
+      line-height: 1.25;
+    }
+    
+    .hp-refpage a{
+      color:#1d4ed8;
+      text-decoration: underline;
+      font-weight: 700;
+    }
+
+    .hp-note{
+      margin-top: 14px;
+      font-size: 12px;
+      color: #6b7280;
     }
 
     </style>
@@ -1167,9 +1261,48 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
 
     about_page = W.HTML(about_html, layout=W.Layout(width="100%"))
+   
+        # ---------- References tab content (reads citations.txt next to ui.py) ----------
+    CITATIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "citations.txt")
+    citations_text = _read_optional_file(CITATIONS_PATH)
+
+    note_html = ""
+    if not citations_text.strip():
+        note_html = (
+            '<div class="hp-note">'
+            'Citations list not found. Create <b>citations.txt</b> next to <b>ui.py</b> and paste one citation per line.'
+            "</div>"
+        )
+
+    items = []
+    for line in (citations_text.splitlines() if citations_text else []):
+        s = line.strip()
+        if not s:
+            continue
+        s = re.sub(r"^[•\-\*]\s*", "", s)  # varsa madde işaretini temizle
+        items.append(f"<li>{_linkify_citation_line(s)}</li>")
+
+    ul_html = "<ul>" + "\n".join(items) + "</ul>" if items else "<ul></ul>"
+
+    refs_html = f"""
+    <div class="hp-refpage">
+      <h2>References:</h2>
+
+      <div class="sub">If you use this program, please cite the following:</div>
+      <div class="cite-main">
+        Emekli U, Schneidman-Duhovny D, Wolfson HJ, Nussinov R, Haliloglu T. (2008)
+        HingeProt: Automated Prediction of Hinges in Protein Structures. Proteins, 70(4):1219-27.
+      </div>
+
+      <h3>Citations:</h3>
+      {ul_html}
+      {note_html}
+    </div>
+    """
+
 
     help_page = W.HTML("<div></div>")
-    refs_page = W.HTML("<div></div>")
+    refs_page = W.HTML(refs_html, layout=W.Layout(width="100%"))
 
     main_view = W.VBox([web_page], layout=W.Layout(width="100%"))
 
