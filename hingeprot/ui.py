@@ -324,7 +324,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       font-size: 13px;
       line-height: 1.35;
       color: #111827;
-      max-width: 1100px;
+      max-width: none;
+      width: 100%
     }
     .hp-about h2{
       margin: 6px 0 6px 0;
@@ -354,14 +355,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     }
     .hp-figbox{
       background:#000;
-      padding:10px;
+      padding:6px;
       border-radius:10px;
       border:1px solid #111827;
     }
     .hp-figbox img{
       display:block;
-      max-width: 420px;
-      width: 420px;
+      max-width: 210px;
+      width: min(210px, 46vw);
       height: auto;
       border-radius:6px;
     }
@@ -1165,7 +1166,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     """
 
 
-    about_page = W.HTML(about_html)
+    about_page = W.HTML(about_html, layout=W.Layout(width="100%"))
 
     help_page = W.HTML("<div></div>")
     refs_page = W.HTML("<div></div>")
