@@ -930,13 +930,10 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     tabs.set_title(3, "References")
 
     # ---------- display ----------
-    # CSS'i widget olarak değil, düz HTML olarak bas (daha stabil)
-    display(HTML(css))
-
-    # Header + tabs tek bir widget içinde olsun (Colab bug'ını bypass eder)
-    app = W.VBox([header, tabs], layout=W.Layout(width="100%"))
-
+    # Tek bir widget olarak bas: Colab'da daha stabil
     tabs.selected_index = 0  # ilk sekme garanti açılsın
+    app = W.VBox([css, header, tabs], layout=W.Layout(width="100%"))
     display(app)
     return None
+
 
