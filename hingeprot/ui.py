@@ -318,6 +318,66 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       border-radius:12px;
       border:1px solid #1f2937;
     }
+
+    .hp-about{
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 13px;
+      line-height: 1.35;
+      color: #111827;
+      max-width: 1100px;
+    }
+    .hp-about h2{
+      margin: 6px 0 6px 0;
+      font-size: 18px;
+      font-weight: 800;
+      color: #1d4ed8; /* blue */
+    }
+    .hp-about h3{
+      margin: 14px 0 6px 0;
+      font-size: 16px;
+      font-weight: 800;
+      color: #1d4ed8; /* blue */
+    }
+    .hp-about p{ margin: 6px 0; }
+    .hp-about .hp-ref{
+      color:#dc2626; /* red */
+      text-decoration: underline;
+      font-weight: 700;
+    }
+    .hp-figrow{
+      display:flex;
+      justify-content:center;
+      align-items:center;
+      gap: 18px;
+      flex-wrap: wrap;
+      margin: 12px 0 10px 0;
+    }
+    .hp-figbox{
+      background:#000;
+      padding:10px;
+      border-radius:10px;
+      border:1px solid #111827;
+    }
+    .hp-figbox img{
+      display:block;
+      max-width: 420px;
+      width: 420px;
+      height: auto;
+      border-radius:6px;
+    }
+    .hp-about .hp-refs{
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid #e5e7eb;
+    }
+    .hp-about .hp-refs ol{
+      margin: 6px 0 0 20px;
+      padding: 0;
+    }
+    .hp-about .hp-refs li{
+      margin: 6px 0;
+    }
+
     </style>
     """)
 
@@ -962,13 +1022,139 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     )
     web_page = W.VBox([top_row, output_card], layout=W.Layout(width="100%", gap="10px"))
 
-    about_text = """Motivation:
+    # Use RAW links so <img> works in HTML
+    img_4cln = "https://raw.githubusercontent.com/enesemretas/hingeprot_fortran/main/assets/4cln.jpg"
+    img_2bbm = "https://raw.githubusercontent.com/enesemretas/hingeprot_fortran/main/assets/2bbm.jpg"
 
-Proteins are highly flexible molecules. It is common to classify protein motions into shear and hinge motion [1]. Shear motions are very limited and involve large number of residues. On the other hand, hinge motions are similar to rotations around an articulated joint and therefore can be very large. Hinge motion is characterized by large changes in main-chain torsional angles occurring at a localized region, which is called a hinge. Hinge motions usually involve a small number of residues, since even one bond can provide the required rotational freedom. This kind of protein motion is free of packing constraints. When a chain exhibits hinge motion at the region connecting two structural domains, each domain behaves as a rigid body and packing interactions can appear/disappear between the interfaces of those rigid bodies. Hinge motions usually occur upon binding to another molecule, or upon activation/deactivation of the protein.
+    about_html = f"""
+    <div class="hp-about">
+      <h2>Motivation:</h2>
 
-One of the most interesting examples is calmodulin. Upon binding to its ligands, there is large-scale movement of calmodulin involving splitting of one long helix. The total rotation of one domain relative to the other is upwards of 150 degrees (see images below and try the server for PDB codes 4cln and 2bbm, chainA)."""
+      <p>
+        Proteins are highly flexible molecules. It is common to classify protein motions into shear and hinge motion
+        <a class="hp-ref" href="#ref1">[1]</a>.
+        Shear motions are very limited and involve large number of residues. On the other hand, hinge motions are
+        similar to rotations around an articulated joint and therefore can be very large. Hinge motion is characterized
+        by large changes in main-chain torsional angles occurring at a localized region, which is called a hinge.
+        Hinge motions usually involve a small number of residues, since even one bond can provide the required rotational
+        freedom. This kind of protein motion is free of packing constraints. When a chain exhibits hinge motion at the
+        region connecting two structural domains, each domain behaves as a rigid body and packing interactions can
+        appear/disappear between the interfaces of those rigid bodies. Hinge motions usually occur upon binding to
+        another molecule, or upon activation/deactivation of the protein.
+      </p>
 
-    about_page = W.HTML(f"<div style='white-space:pre-wrap;'>{_safe_html(about_text)}</div>")
+      <p>
+        One of the most interesting examples is calmodulin. Upon binding to its ligands, there is large-scale movement
+        of calmodulin involving splitting of one long helix. The total rotation of one domain relative to the other is
+        upwards of 150 degrees (see images below and try the server for PDB codes 4cln and 2bbm, chainA).
+      </p>
+
+      <div class="hp-figrow">
+        <div class="hp-figbox"><img src="{img_4cln}" alt="Calmodulin 4cln"></div>
+        <div class="hp-figbox"><img src="{img_2bbm}" alt="Calmodulin 2bbm"></div>
+      </div>
+
+      <p>
+        Therefore, hinge regions are the mechanistically informative regions of the structure and are of great importance
+        in mediating cooperative motions that have functional importance.
+      </p>
+
+      <p>
+        <i>HingeProt</i> is a web server for predicting rigid protein parts and the flexible hinge regions connecting them
+        in the native topology of protein chains by employing elastic network (EN) models.
+        <i>HingeProt</i> makes use of both Gaussian Network Model (GNM)
+        <a class="hp-ref" href="#ref2">[2]</a>, <a class="hp-ref" href="#ref3">[3]</a>
+        and Anisotropic Network models (ANM)
+        <a class="hp-ref" href="#ref4">[4]</a>.
+      </p>
+
+      <p>
+        <i>HingeProt</i> server focuses on the prediction of the rigid parts and the hinge regions using a single static
+        conformation of a protein structure. The hinge regions are the mechanistically informative regions of the
+        structure and are of importance in mediating cooperative motions that have functional importance. GNM calculates
+        the mean-square fluctuations and the correlation between the fluctuations of residues in the most dominant
+        (slowest two) modes, which were shown to overlap with known protein motions. These suggest hinge regions and the
+        cooperation between them. ANM provides the direction of the fluctuations in the corresponding modes.
+      </p>
+
+      <p>
+        <i>HingeProt</i> is expected to be useful in a range of potential applications, especially in prediction
+        protein-protein association by flexible docking and in refinement of the structure of the modeled complexes.
+        <i>HingeProt</i> predictions are also helpful in fitting flexible hinge-bent protein structures into EM density
+        maps and refining the EM structures. In addition, hinge regions can help in understanding functional mechanisms
+        of macromolecular structures and assemblies.
+      </p>
+
+      <p>
+        Given an input protein chain, <i>HingeProt</i> identifies the rigid parts and the hinges connecting them, and the
+        direction of the fluctuation of each residue in the slowest two modes.
+      </p>
+
+      <h3>Method:</h3>
+
+      <p>
+        GNM <a class="hp-ref" href="#ref2">[2]</a>, <a class="hp-ref" href="#ref3">[3]</a> and its extension ANM
+        <a class="hp-ref" href="#ref4">[4]</a> are coarse-grained residue level elastic network models. GNM predicts the
+        relative magnitudes of the fluctuations, whereas ANM predicts the directionalities of the collective motions in
+        addition to their magnitudes. GNM results are more robust, and thus are preferentially used for evaluating square
+        displacements in low frequency modes <a class="hp-ref" href="#ref4">[4]</a>. Here GNM is used to calculate
+        mean-square fluctuations and correlation between the fluctuations of residues, and ANM to generate the
+        conformations that describe the fluctuations of residues from the average, X-ray, structure in the principal
+        directions of motion.
+      </p>
+
+      <p>
+        In <i>HingeProt</i>, first GNM decomposes the fluctuations of N residues of a structure into a series of N-1
+        nonzero modes, given the Cartesian coordinates of Cα atoms. The eigenvectors corresponding to the slowest first
+        and second modes are extracted. The square of these vectors describes the mean-square fluctuations (the
+        autocorrelations) of residues from equilibrium positions along the principal coordinates (first and second modes
+        here). Minima of mean square fluctuations at a given mode describe the flexible joints of the structure, i.e.
+        the hinge regions, which connect the rigid units and mobile loops.
+      </p>
+
+      <p>
+        GNM fluctuations being isotropic by definition, the directions of fluctuations are characterized by ANM. ANM
+        predicts the fluctuations of N residues in the x, y and z directions from the average structure (X-ray or NMR) in
+        3N-6 ANM nonzero modes. After mapping the ANM modes to GNM modes by comparing the square fluctuations, between
+        the resulting modes in the two models, the directions of the fluctuations of residues in the slowest first and
+        second modes of GNM are obtained by ANM analysis. As the fluctuations are symmetric with respect to the
+        equilibrium positions, ANM predicted deformed structures could be obtained by adding and subtracting the
+        fluctuations of each residue to/from its equilibrium position.
+      </p>
+
+      <p>
+        For more detailed background of the work see the article.
+      </p>
+
+      <div class="hp-refs">
+        <h3 style="margin-top:10px;">References :</h3>
+        <ol>
+          <li id="ref1">
+            <span class="hp-ref">[1]</span>
+            Gerstein M, Lesk A. M. Lesk, Chothia C. (1994) Structural Mechanisms for Domain Movements in Proteins,
+            Biochemistry 33(22), 6739-6749
+          </li>
+          <li id="ref2">
+            <span class="hp-ref">[2]</span>
+            Bahar, I., Atilgan A. R., Erman, B. (1997) Direct evaluation of thermal fluctuations in proteins using a
+            single-parameter harmonic potential. Folding and Design, 2, 173-181.
+          </li>
+          <li id="ref3">
+            <span class="hp-ref">[3]</span>
+            Haliloglu, T., Bahar I, Erman B. (1997) Gaussian Dynamics of Proteins, Physical review letters, 79, 3090-3093
+          </li>
+          <li id="ref4">
+            <span class="hp-ref">[4]</span>
+            Atilgan, A. R., Durell, A. R., Jernigan, R. L., Demirel, M. C., Keskin, O., Bahar, I. (2001),
+            Anisotropy of fluctuation dynamics of proteins with an elastic network model. Biophysical Journal, 80, 505-515
+          </li>
+        </ol>
+      </div>
+    </div>
+    """
+
+    about_page = W.HTML(about_html)
+
     help_page = W.HTML("<div></div>")
     refs_page = W.HTML("<div></div>")
 
