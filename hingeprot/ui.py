@@ -489,15 +489,28 @@ def rigidparts_report_html_from_report(
     pdb_label: str,
     report: dict[int, dict[str, object]],
     short_frags_by_mode: dict[int, list[str]],
+    out_dir: str,  # NEW
 ) -> str:
     def _css_cell() -> str:
         return "padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;"
 
     blocks: list[str] = []
     for mode in sorted(report.keys()):
+
+        # --- NEW: mode1/mode2 download link (if file exists) ---
+        btn_html = ""
+        if mode in (1, 2):
+            fname = f"{pdb_label}.mode{mode}.pdb"  # e.g. 3lzg.pdb.mode1.pdb
+            fpath = os.path.join(out_dir, fname)
+            if os.path.exists(fpath) and os.path.getsize(fpath) > 0:
+                # Colab serves /content/... as /files/content/...
+                href = f"/files{fpath}"
+                btn_html = f"<a class='hp-dlbtn' href='{href}' download='{fname}'>Download mode{mode}.pdb</a>"
+
         blocks.append(
-            f"<div style='margin:10px 0 6px 0;color:#dc2626;font-weight:900;'>"
-            f"----&gt; slowest mode {mode}: {pdb_label}"
+            f"<div class='hp-modebar'>"
+            f"  <div style='color:#dc2626;font-weight:900;'>----&gt; slowest mode {mode}: {pdb_label}</div>"
+            f"  {btn_html}"
             f"</div>"
         )
 
@@ -518,13 +531,9 @@ def rigidparts_report_html_from_report(
         hinge_tokens = list(report[mode].get("hinge_tokens", []) or [])
         hinge_line = " ".join(hinge_tokens) if hinge_tokens else "-"
 
-        # Short frags
         frags = short_frags_by_mode.get(mode, []) or []
-        short_html = ""
         if frags:
-            items = []
-            for k, frag in enumerate(frags, start=1):
-                items.append(f"<div style='margin:2px 0;'>{k}. {frag}</div>")
+            items = [f"<div style='margin:2px 0;'>{k}. {frag}</div>" for k, frag in enumerate(frags, start=1)]
             short_html = (
                 "<div style='margin-top:10px;color:#dc2626;font-weight:900;'>Short Flexible Fragments:</div>"
                 + "".join(items)
@@ -544,9 +553,7 @@ def rigidparts_report_html_from_report(
             f"</tr></thead>"
             f"<tbody>{''.join(rows) if rows else ''}</tbody>"
             f"</table>"
-            f"<div style='margin-top:6px;color:#1d4ed8;font-weight:900;'>"
-            f"Hinge residues: {hinge_line}"
-            f"</div>"
+            f"<div style='margin-top:6px;color:#1d4ed8;font-weight:900;'>Hinge residues: {hinge_line}</div>"
             f"{short_html}"
             f"</div>"
         )
@@ -966,6 +973,31 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       font-size: 12px;
       color: #6b7280;
     }
+
+        .hp-modebar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin:10px 0 6px 0;
+    }
+    .hp-dlbtn{
+      display:inline-block;
+      padding:6px 10px;
+      border-radius:10px;
+      border:1px solid #e5e7eb;
+      background:#ffffff;
+      color:#111827;
+      font-size:12px;
+      font-weight:800;
+      text-decoration:none;
+      white-space:nowrap;
+    }
+    .hp-dlbtn:hover{
+      border-color:#93c5fd;
+      box-shadow:0 1px 0 rgba(0,0,0,0.04);
+    }
+
 
     </style>
     """)
@@ -1559,7 +1591,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 pdb_label=pdb_filename,
                 report=report,
                 short_frags_by_mode=short_frags_by_mode,
+                out_dir=dest_out_dir,  # NEW
             )
+
 
 
             progress.value = 4
