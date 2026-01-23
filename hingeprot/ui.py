@@ -1678,7 +1678,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             chains_str = captured["chains_str"] or ""
             chains_pretty = ", ".join(list(chains_str)) if chains_str else "-"
             output_info.value = (
-                "<div style='text-align:center; font-family:Arial, Helvetica, sans-serif;"
+                "<div style='text-align:left; font-family:Arial, Helvetica, sans-serif;"
                 "font-weight:800; color:#111827; margin:2px 0 6px 0;'>"
                 f"{_safe_html(fname)} for Chain(s) : {_safe_html(chains_pretty)}"
                 "</div>"
