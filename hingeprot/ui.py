@@ -908,6 +908,53 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         new = f"hp3d_{uuid.uuid4().hex}"
         return raw_html.replace(old, new)
 
+    def _wrap_html_doc(snippet: str) -> str:
+        return (
+            "<!doctype html><html><head><meta charset='utf-8'></head>"
+            "<body style='margin:0;overflow:hidden;'>"
+            f"{snippet}"
+            "</body></html>"
+        )
+    
+    def _write_html_and_get_iframe(raw_html_doc: str, save_dir: str, w: int, h: int) -> str:
+        """
+        Colab: /files + absolute path works.
+        Local: /files + *relative-to-cwd* path works (absolute path usually DOES NOT).
+        If file is outside cwd, copy it under cwd/.hp_iframes.
+        """
+        save_dir = os.path.abspath(save_dir or os.getcwd())
+        tmp_dir = os.path.join(save_dir, ".hp_iframes")
+        os.makedirs(tmp_dir, exist_ok=True)
+    
+        html_path = os.path.join(tmp_dir, f"hp3d_{uuid.uuid4().hex}.html")
+        Path(html_path).write_text(raw_html_doc, encoding="utf-8")
+    
+        if IS_COLAB:
+            src = f"/files{html_path}"  # absolute ok in Colab
+        else:
+            # local: need relpath under current notebook root (cwd)
+            cwd = os.path.abspath(os.getcwd())
+            rel = os.path.relpath(html_path, start=cwd)
+            if rel.startswith(".."):
+                # copy under cwd to ensure /files can serve it
+                safe_dir = os.path.join(cwd, ".hp_iframes")
+                os.makedirs(safe_dir, exist_ok=True)
+                safe_path = os.path.join(safe_dir, os.path.basename(html_path))
+                shutil.copy2(html_path, safe_path)
+                rel = os.path.relpath(safe_path, start=cwd)
+    
+            rel = rel.replace(os.sep, "/")
+            src = f"/files/{rel}"
+    
+        return (
+            f"<iframe src='{src}' "
+            f"sandbox='allow-scripts allow-same-origin' "
+            f"style='width:{w}px;height:{h}px;border:1px solid #e5e7eb;"
+            f"border-radius:12px;overflow:hidden;'></iframe>"
+        )
+
+    
+
     def _read_pdb_for_frames(path: str) -> str:
         """MODEL/ENDMDL/END satırlarını temizleyip frame olarak kullanılabilir pdb text döndürür."""
         txt = Path(path).read_text(encoding="utf-8", errors="ignore")
@@ -1062,8 +1109,13 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 iframe_src = f"/files{html_path}"
                 sandbox_attr = "sandbox='allow-scripts allow-same-origin'"
             else:
-                b64 = base64.b64encode(raw.encode("utf-8")).decode("ascii")
-                iframe_src = f"data:text/html;base64,{b64}"
+                raw = _html_with_unique_divid(view._make_html())
+                doc = _wrap_html_doc(raw)
+                save_dir = os.path.dirname(os.path.abspath(mode_pdb_path))
+                iframe = _write_html_and_get_iframe(doc, save_dir=save_dir, w=MODE_W, h=MODE_H)
+                
+                holder.value = iframe
+
                 sandbox_attr = ""  # localhost: sandbox'sız daha sorunsuz
 
             holder.value = (
@@ -1557,12 +1609,17 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
         v.zoomTo()
 
-        raw = v._make_html()
-        raw = _html_with_unique_divid(raw)
-
+        raw = _html_with_unique_divid(v._make_html())
+        doc = _wrap_html_doc(raw)
+        
+        # html'i run_dir altına yazmak en iyisi (load ile zaten run_dir oluşuyor)
+        save_dir = state.get("run_dir") or os.getcwd()
+        iframe = _write_html_and_get_iframe(doc, save_dir=save_dir, w=VIEW_W, h=VIEW_H)
+        
         with viewer_out:
             clear_output(wait=True)
-            display(HTML(raw))
+            display(HTML(iframe))
+
 
     # ---------- input visibility ----------
     def _sync_input_visibility(*_):
