@@ -565,14 +565,23 @@ def rigidparts_report_widget_from_report(
     report: dict[int, dict[str, object]],
     short_frags_by_mode: dict[int, list[str]],
     out_dir: str,
-    download_fn,  # _download_file
+    download_fn,
+    mode_viewer_fn=None,      # <-- NEW
+    ref_pdb_path: str | None = None,  # <-- NEW (isteğe bağlı)
 ) -> W.VBox:
+
     def _css_cell() -> str:
         return "padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;"
 
     blocks: list[W.Widget] = []
 
     for mode in sorted(report.keys()):
+        # --- NEW: Mode 1/2 mini-viewer (başlığın üstüne, ortalı) ---
+        if mode_viewer_fn is not None and mode in (1, 2):
+            mfile = os.path.join(out_dir, f"{pdb_label}.mode{mode}.pdb")
+            if os.path.exists(mfile) and os.path.getsize(mfile) > 0:
+                blocks.append(mode_viewer_fn(mfile, ref_pdb_path))
+ 
         # --- header text ---
         header_text = W.HTML(
             f"<div style='width:100%; text-align:center; color:#dc2626; font-weight:900;'>"
@@ -899,6 +908,70 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         new = f"hp3d_{uuid.uuid4().hex}"
         return raw_html.replace(old, new)
 
+    def _read_pdb_for_frames(path: str) -> str:
+        """MODEL/ENDMDL/END satırlarını temizleyip frame olarak kullanılabilir pdb text döndürür."""
+        txt = Path(path).read_text(encoding="utf-8", errors="ignore")
+        out_lines = []
+        for ln in txt.splitlines():
+            if ln.startswith(("MODEL", "ENDMDL", "END")):
+                continue
+            out_lines.append(ln)
+        return "\n".join(out_lines).rstrip() + "\n"
+
+    def _make_mode_viewer(mode_pdb_path: str, ref_pdb_path: str | None = None) -> W.Widget:
+        """
+        Mode PDB'yi Slowest Mode başlığının üstünde göstermek için mini py3Dmol viewer.
+        ref_pdb_path verilirse: ref + mode => 2 frame animasyon (back and forth).
+        """
+        py3Dmol = _ensure_py3dmol()
+
+        MODE_W = 560
+        MODE_H = 260
+
+        box = W.Output(
+            layout=W.Layout(
+                width=f"{MODE_W}px",
+                height=f"{MODE_H}px",
+                border="1px solid #e5e7eb",
+                border_radius="12px",
+                padding="6px",
+                overflow="hidden",
+            )
+        )
+
+        with box:
+            clear_output(wait=True)
+
+            v = py3Dmol.view(width=MODE_W, height=MODE_H)
+            v.setBackgroundColor("white")
+
+            if ref_pdb_path and os.path.exists(ref_pdb_path):
+                ref_txt  = _read_pdb_for_frames(ref_pdb_path)
+                mode_txt = _read_pdb_for_frames(mode_pdb_path)
+
+                multi = (
+                    "MODEL 1\n" + ref_txt  + "ENDMDL\n"
+                    "MODEL 2\n" + mode_txt + "ENDMDL\n"
+                )
+                v.addModelsAsFrames(multi, "pdb")
+                v.setStyle({}, {"cartoon": {"color": "lightgray"}})
+                v.zoomTo()
+                v.animate({"loop": "backAndForth", "reps": 0, "interval": 160})
+            else:
+                mode_txt = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
+                v.addModel(mode_txt, "pdb")
+                v.setStyle({}, {"cartoon": {"color": "lightgray"}})
+                v.zoomTo()
+
+            raw = v._make_html()
+            raw = _html_with_unique_divid(raw)
+            display(HTML(raw))
+
+        # ortalamak için HBox ile sar
+        return W.HBox([box], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
+
+
+    
     # chain colors (deterministic per detected order)
     _CHAIN_PALETTE = [
         "red", "blue", "green", "orange", "purple", "cyan", "magenta",
@@ -1731,10 +1804,13 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                     pdb_label=pdb_filename,
                     report=report,
                     short_frags_by_mode=short_frags_by_mode,
-                    out_dir=dest_out_dir,          # senin path burada
-                    download_fn=_download_file,    # NEW
+                    out_dir=dest_out_dir,
+                    download_fn=_download_file,
+                    mode_viewer_fn=_make_mode_viewer,               # <-- NEW
+                    ref_pdb_path=str(pdb_chain_path),               # <-- NEW (pdb + mode animasyonu için)
                 ),
             )
+
 
 
 
