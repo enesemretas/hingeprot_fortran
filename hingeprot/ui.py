@@ -245,67 +245,32 @@ def _leading_int_str(resid: str) -> Optional[str]:
 
 def read_last_residue_id_from_new(new_path: Path) -> Dict[str, str]:
     """
-    Kural-4: Son residue etiketi mümkünse .new dosyasından alınır.
-    Dönüş: {chain: last_resid}. Chain bilgisi bulunamazsa {"*": last_resid}.
-    Okuma başarısızsa {} döner.
+    Kural-4: Son residue etiketi mümkünse .new dosyasının ATOM/HETATM satırlarından alınır.
+    PDB fixed-column okur:
+      chain  = line[21]
+      resSeq = line[22:26]
+      iCode  = line[26]
+    Dönüş: {chain: last_resid}
     """
     if not new_path.exists() or new_path.stat().st_size == 0:
         return {}
 
     last_by_chain: Dict[str, str] = {}
 
-    def _is_chain_token(x: str) -> bool:
-        return bool(re.fullmatch(r"[A-Za-z0-9]", (x or "").strip()))
-
-    def _looks_like_resid(x: str) -> bool:
-        # en azından başında integer olsun (123, 123A, -1, 45BC vb.)
-        return _leading_int_str((x or "").strip()) is not None
-
     with new_path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
-            s = (line or "").strip()
-            if not s:
+            if not (line.startswith("ATOM") or line.startswith("HETATM")):
+                continue
+            if len(line) < 27:
                 continue
 
-            # 1) PDB-like ise direkt parse et
-            parsed = _parse_pdb_like_chain_resid(s)
-            if parsed:
-                ch, resid = parsed
+            ch = line[21].strip()
+            resnum = line[22:26].strip()
+            icode = line[26].strip()
+            resid = (resnum + icode).strip()
+
+            if ch and resid:
                 last_by_chain[ch] = resid
-                continue
-
-            parts = s.split()
-            if len(parts) < 2:
-                continue
-
-            # 2) Hinge benzeri: "... <resid> <chain>"
-            if len(parts) >= 3:
-                ch = parts[-1].strip()
-                resid = parts[-2].strip()
-                if _is_chain_token(ch) and _looks_like_resid(resid):
-                    last_by_chain[ch] = resid
-                    continue
-
-            # 3) "<chain> <resid> ..."
-            ch = parts[0].strip()
-            resid = parts[1].strip()
-            if _is_chain_token(ch) and _looks_like_resid(resid):
-                last_by_chain[ch] = resid
-                continue
-
-            # 4) "... <chain> <resid>"
-            ch = parts[-2].strip()
-            resid = parts[-1].strip()
-            if _is_chain_token(ch) and _looks_like_resid(resid):
-                last_by_chain[ch] = resid
-                continue
-
-            # 5) Chain yok ama resid var gibi: son "resid" adayını sakla
-            # (en sonda numeric başlayan bir token bulursak)
-            for tok in reversed(parts):
-                if _looks_like_resid(tok):
-                    last_by_chain["*"] = tok.strip()
-                    break
 
     return last_by_chain
 
