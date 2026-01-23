@@ -178,6 +178,378 @@ def _find_hinges_file(out_dir: str, pdb_filename: str) -> str | None:
             return p
     return None
 
+# ------------------------- NEW: parse .new.hinges report -------------------------
+
+_NEW_MODE_RE = re.compile(r"^---->\s*Slowest\s+mode\s+(\d+)\s*:", re.IGNORECASE)
+_NEW_NPART_RE = re.compile(r"#\s*of\s*rigid\s*parts\s*:\s*(\d+)", re.IGNORECASE)
+_NEW_HINGE_RE = re.compile(r"^Hinge\s+residues\s*:\s*(.*)$", re.IGNORECASE)
+
+def _find_new_hinges_report(out_dir: str, pdb_filename: str) -> str | None:
+    base = os.path.basename(pdb_filename)
+    base_noext = os.path.splitext(base)[0]
+
+    candidates = [
+        os.path.join(out_dir, f"{base}.new.hinges"),         # 3lzg.pdb.new.hinges
+        os.path.join(out_dir, f"{base_noext}.new.hinges"),   # 3lzg.new.hinges
+        os.path.join(out_dir, f"{base_noext}.pdb.new.hinges"),
+        os.path.join(out_dir, f"{base}.new.hinge"),
+        os.path.join(out_dir, f"{base_noext}.new.hinge"),
+    ]
+    for p in candidates:
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            return p
+
+    # fallback: dizinde ne varsa bul (en büyük dosyayı seç)
+    try:
+        found = sorted(
+            Path(out_dir).glob("*.new.hinges"),
+            key=lambda x: x.stat().st_size,
+            reverse=True,
+        )
+        if found:
+            return str(found[0])
+    except Exception:
+        pass
+
+    return None
+
+
+
+def parse_new_hinges_report(report_path: Path) -> dict[int, dict[str, object]]:
+    """
+    Returns:
+      report[mode] = {
+        "n_parts": int|None,
+        "parts": list[tuple[int, str]]  # (part_no, residues_str) residues_str = direction öncesi
+        "hinge_tokens": list[str]       # e.g. ["45A","305A","60B","87B"]
+        "hinge_token_set": set[str]     # aynı tokenların set'i (hızlı lookup)
+      }
+    """
+    report: dict[int, dict[str, object]] = {}
+    mode: int | None = None
+
+    with report_path.open("r", encoding="utf-8", errors="replace") as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            s = line.strip()
+            if not s:
+                continue
+
+            m = _NEW_MODE_RE.match(s)
+            if m:
+                mode = int(m.group(1))
+                report.setdefault(mode, {"n_parts": None, "parts": [], "hinge_tokens": [], "hinge_token_set": set()})
+                continue
+
+            if mode is None:
+                continue
+
+            m = _NEW_NPART_RE.search(s)
+            if m:
+                report[mode]["n_parts"] = int(m.group(1))
+                continue
+
+            if s.startswith("Part "):
+                # "Part 2 A:46-55,...  direction 0.0 ..."
+                # İstenen: direction'a kadar aynen
+                # 1) part no
+                mnum = re.match(r"^Part\s+(\d+)\s+", s)
+                if not mnum:
+                    continue
+                pno = int(mnum.group(1))
+                rest = s[mnum.end():]  # after "Part k "
+                # 2) cut at "direction"
+                idx = rest.lower().find("direction")
+                residues_str = rest[:idx].rstrip() if idx != -1 else rest.rstrip()
+                # aynı part no tekrar gelirse overwrite yerine append; rapor genelde tekil
+                report[mode]["parts"].append((pno, residues_str))
+                continue
+
+            mh = _NEW_HINGE_RE.match(s)
+            if mh:
+                tail = (mh.group(1) or "").strip()
+                tail = tail.replace(",", " ")
+                tokens = re.findall(r"-?\d+[A-Za-z]?", tail)
+                report[mode]["hinge_tokens"] = tokens
+                report[mode]["hinge_token_set"] = set(tokens)
+                continue
+
+    # parts sorted
+    for m in report:
+        parts = list(report[m].get("parts", []))
+        parts.sort(key=lambda x: x[0])
+        report[m]["parts"] = parts
+
+    return report
+
+
+# ------------------------- NEW: short flexible fragments -------------------------
+
+def _leading_int_str(resid: str) -> str | None:
+    t = (resid or "").strip()
+    m = re.match(r"^(-?\d+)", t)
+    return m.group(1) if m else None
+
+def _resnum_int(resid: str) -> int | None:
+    s = _leading_int_str(resid)
+    if s is None:
+        return None
+    try:
+        return int(s)
+    except Exception:
+        return None
+
+def _token_to_resid_chain(tok: str) -> tuple[str | None, str | None]:
+    """
+    Hinge residues token like '116A' -> resid='116', chain='A'
+    """
+    t = (tok or "").strip()
+    if len(t) < 2:
+        return None, None
+    chain = t[-1]
+    resid = t[:-1]
+    if not chain.strip() or not resid.strip():
+        return None, None
+    return resid.strip(), chain.strip()
+
+def compute_short_flexible_fragments(
+    residues_by_chain: dict[str, list[str]],
+    hinge_modes: dict[int, dict[str, list[tuple[int, str]]]],  # parse_hinge_file çıktın
+    report: dict[int, dict[str, object]],
+    min_len: int = 14,
+) -> dict[int, list[str]]:
+    """
+    For each mode:
+      - take hinges from .hinge
+      - remove those that are in report's 'Hinge residues' list
+      - apply old 'restart removal' logic (min_len)
+      - output fragments with chain IDs at ends: '46A-55A'
+    """
+    out: dict[int, list[str]] = {}
+
+    for mode, ch_map in hinge_modes.items():
+        hinge_set = set(report.get(mode, {}).get("hinge_token_set", set()) or set())
+
+        mode_fragments: list[str] = []
+
+        for ch, entries in (ch_map or {}).items():
+            if not entries:
+                continue
+
+            # start residue id for head-pair
+            start_label = None
+            if ch in residues_by_chain and residues_by_chain[ch]:
+                start_label = residues_by_chain[ch][0]
+            start_num = _resnum_int(start_label) if start_label else None
+
+            # filter hinges: remove those in Hinge residues
+            hinges = []
+            for seq_idx, resid in entries:
+                resid = str(resid).strip()
+                tok = f"{resid}{ch}"
+                if tok in hinge_set:
+                    continue
+                hinges.append({
+                    "seq": int(seq_idx),
+                    "resid": resid,
+                    "resnum": _resnum_int(resid),
+                })
+
+            hinges.sort(key=lambda x: x["seq"])
+
+            removed_ranges_int: list[tuple[int, int]] = []
+            removed_ranges_str: list[tuple[str, str]] = []  # fallback if ints yok
+
+            def gap(i: int, j: int) -> int:
+                ri, rj = hinges[i].get("resnum"), hinges[j].get("resnum")
+                if isinstance(ri, int) and isinstance(rj, int):
+                    return abs(rj - ri)
+                return abs(int(hinges[j]["seq"]) - int(hinges[i]["seq"]))
+
+            def head_len() -> int:
+                if not hinges:
+                    return 0
+                r1 = hinges[0].get("resnum")
+                if isinstance(start_num, int) and isinstance(r1, int):
+                    return abs(r1 - start_num) + 1
+                # seq index fallback: assume first residue ~1
+                return abs(int(hinges[0]["seq"]) - 1) + 1
+
+            # --- restart loop (same spirit as your old code) ---
+            while True:
+                if not hinges:
+                    break
+
+                # Rule: first two hinge too close
+                if len(hinges) >= 2 and gap(0, 1) < min_len:
+                    h1, h2 = hinges[0], hinges[1]
+                    r1, r2 = h1.get("resnum"), h2.get("resnum")
+
+                    if isinstance(r1, int) and isinstance(r2, int):
+                        a = r1 + 1
+                        b = r2
+                        if a <= b:
+                            removed_ranges_int.append((a, b))
+                    else:
+                        # fallback: can't do +1 safely
+                        a = str(h1.get("resid"))
+                        b = str(h2.get("resid"))
+                        removed_ranges_str.append((a, b))
+
+                    del hinges[1]
+                    del hinges[0]
+                    continue
+
+                # Rule: head segment too short
+                if head_len() < min_len:
+                    h1 = hinges[0]
+                    r1 = h1.get("resnum")
+                    if isinstance(start_num, int) and isinstance(r1, int):
+                        a = start_num
+                        b = r1
+                        if a <= b:
+                            removed_ranges_int.append((a, b))
+                    else:
+                        # requirement: if first hinge missing but second exists,
+                        # pair with first residue id (label) (we do it here)
+                        if start_label:
+                            removed_ranges_str.append((str(start_label), str(h1.get("resid"))))
+                    del hinges[0]
+                    continue
+
+                # scan other pairs
+                if len(hinges) < 2:
+                    break
+
+                removed_any = False
+                for i in range(len(hinges) - 1):
+                    if gap(i, i + 1) < min_len:
+                        h1, h2 = hinges[i], hinges[i + 1]
+                        r1, r2 = h1.get("resnum"), h2.get("resnum")
+
+                        if isinstance(r1, int) and isinstance(r2, int):
+                            a = r1 + 1
+                            b = r2
+                            if a <= b:
+                                removed_ranges_int.append((a, b))
+                        else:
+                            a = str(h1.get("resid"))
+                            b = str(h2.get("resid"))
+                            removed_ranges_str.append((a, b))
+
+                        del hinges[i + 1]
+                        del hinges[i]
+                        removed_any = True
+                        break
+
+                if removed_any:
+                    continue
+                break
+
+            # merge int ranges
+            removed_ranges_int.sort()
+            merged: list[tuple[int, int]] = []
+            for a, b in removed_ranges_int:
+                if not merged:
+                    merged.append((a, b))
+                else:
+                    pa, pb = merged[-1]
+                    if a <= pb + 1:
+                        merged[-1] = (pa, max(pb, b))
+                    else:
+                        merged.append((a, b))
+
+            # render fragments with chain at ends
+            for a, b in merged:
+                mode_fragments.append(f"{a}{ch}-{b}{ch}")
+            for a, b in removed_ranges_str:
+                # NOTE: a already may include insertion; still append chain at ends
+                mode_fragments.append(f"{a}{ch}-{b}{ch}")
+
+        # stabilize / dedup (keep order-ish)
+        seen = set()
+        cleaned = []
+        for x in mode_fragments:
+            if x not in seen:
+                seen.add(x)
+                cleaned.append(x)
+
+        out[mode] = cleaned
+
+    return out
+
+
+# ------------------------- NEW: HTML renderer (mode-based, no chain blocks) -------------------------
+
+def rigidparts_report_html_from_report(
+    pdb_label: str,
+    report: dict[int, dict[str, object]],
+    short_frags_by_mode: dict[int, list[str]],
+) -> str:
+    def _css_cell() -> str:
+        return "padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;"
+
+    blocks: list[str] = []
+    for mode in sorted(report.keys()):
+        blocks.append(
+            f"<div style='margin:10px 0 6px 0;color:#dc2626;font-weight:900;'>"
+            f"----&gt; slowest mode {mode}: {pdb_label}"
+            f"</div>"
+        )
+
+        n_parts = report[mode].get("n_parts", None)
+        if isinstance(n_parts, int):
+            blocks.append(f"<div style='margin:4px 0 8px 0;font-weight:800;'># of rigid parts: {n_parts}</div>")
+
+        parts = list(report[mode].get("parts", []) or [])
+        rows = []
+        for pno, residues_str in parts:
+            rows.append(
+                f"<tr>"
+                f"<td style='{_css_cell()}'>{pno}</td>"
+                f"<td style='{_css_cell()}'>{residues_str}</td>"
+                f"</tr>"
+            )
+
+        hinge_tokens = list(report[mode].get("hinge_tokens", []) or [])
+        hinge_line = " ".join(hinge_tokens) if hinge_tokens else "-"
+
+        # Short frags
+        frags = short_frags_by_mode.get(mode, []) or []
+        short_html = ""
+        if frags:
+            items = []
+            for k, frag in enumerate(frags, start=1):
+                items.append(f"<div style='margin:2px 0;'>{k}. {frag}</div>")
+            short_html = (
+                "<div style='margin-top:10px;color:#dc2626;font-weight:900;'>Short Flexible Fragments:</div>"
+                + "".join(items)
+            )
+        else:
+            short_html = (
+                "<div style='margin-top:10px;color:#dc2626;font-weight:900;'>Short Flexible Fragments:</div>"
+                "<div style='margin:2px 0;'>-</div>"
+            )
+
+        blocks.append(
+            f"<div style='margin:8px 0 14px 0;'>"
+            f"<table style='width:100%;border-collapse:collapse;'>"
+            f"<thead><tr>"
+            f"<th style='text-align:left;{_css_cell()}border-bottom:2px solid #e5e7eb;'>Rigid Part No</th>"
+            f"<th style='text-align:left;{_css_cell()}border-bottom:2px solid #e5e7eb;'>Residues</th>"
+            f"</tr></thead>"
+            f"<tbody>{''.join(rows) if rows else ''}</tbody>"
+            f"</table>"
+            f"<div style='margin-top:6px;color:#1d4ed8;font-weight:900;'>"
+            f"Hinge residues: {hinge_line}"
+            f"</div>"
+            f"{short_html}"
+            f"</div>"
+        )
+
+    return "<div style='font-family:Arial, Helvetica, sans-serif;'>" + "".join(blocks) + "</div>"
+
+
 # ------------------------- rigid parts report helpers -------------------------
 
 def _parse_pdb_like_chain_resid(line: str) -> Optional[Tuple[str, str]]:
@@ -222,121 +594,17 @@ def read_residue_order_from_pdb(pdb_path: Path) -> Dict[str, List[str]]:
 
     return residues_by_chain
 
+_STRIP_TRAIL_RE = re.compile(r"^(-?\d+)([A-Za-z]+)$")
 
-
-def _strip_trailing_letters(resid: str) -> str:
+def _strip_trailing_letters(token: str) -> str:
     """
-    If resid looks like pure integer followed by letters (e.g., '123A', '45BC'),
-    strip trailing letters -> '123'. Otherwise return as-is.
+    '45A' -> '45' (chain zaten ayrı kolonda geldiği için)
+    '123' -> '123'
+    '45A,' -> '45'  (sondaki virgül/noktalı virgül temizlenir)
     """
-    t = (resid or "").strip()
-    m = re.match(r"^(-?\d+)[A-Za-z]+$", t)
+    t = (token or "").strip().rstrip(",;")
+    m = _STRIP_TRAIL_RE.match(t)
     return m.group(1) if m else t
-
-
-def _leading_int_str(resid: str) -> Optional[str]:
-    """
-    Extract leading integer part from a resid token (e.g., '123A' -> '123', '123'->'123').
-    Returns None if no leading integer exists.
-    """
-    t = (resid or "").strip()
-    m = re.match(r"^(-?\d+)", t)
-    return m.group(1) if m else None
-
-def _has_insertion_suffix(resid: str) -> bool:
-    """'100A', '45BC' gibi sonu harfli residue id mi?"""
-    t = (resid or "").strip()
-    return bool(re.match(r"^-?\d+[A-Za-z]+$", t))
-
-
-def _resnum_int(resid: str) -> Optional[int]:
-    """Resid'den leading integer'ı int olarak alır. Yoksa None."""
-    s = _leading_int_str(resid)
-    if s is None:
-        return None
-    try:
-        return int(s)
-    except Exception:
-        return None
-
-
-def _adjust_parts_for_insertions(parts: List[Tuple[int, int]], residue_list: List[str]) -> List[Tuple[int, int]]:
-    """
-    Eğer bir part b ile bitiyorsa ve (b+1) aynı sayı + harf ise (örn. 100 -> 100A),
-    o insertion residue(leri) bir önceki part'a katılır; sonraki part başlangıcı atlatılır.
-    """
-    if not parts or len(parts) < 2:
-        return parts
-
-    parts = list(parts)
-    i = 0
-    while i < len(parts) - 1:
-        a1, b1 = parts[i]
-        a2, b2 = parts[i + 1]
-
-        end = b1
-        start = a2
-
-        while start <= b2 and start == end + 1:
-            r_end = residue_list[end]
-            r_next = residue_list[start]
-            n_end = _leading_int_str(r_end)
-            n_next = _leading_int_str(r_next)
-
-            if n_end and n_next and (n_end == n_next) and _has_insertion_suffix(r_next):
-                # 100A, 100B ... hepsini önceki part'a kat
-                end += 1
-                start += 1
-            else:
-                break
-
-        parts[i] = (a1, end)
-        parts[i + 1] = (start, b2)
-
-        # eğer sonraki part boşaldıysa sil
-        if parts[i + 1][0] > parts[i + 1][1]:
-            del parts[i + 1]
-            continue
-
-        i += 1
-
-    return parts
-
-
-
-
-
-def read_last_residue_id_from_new(new_path: Path) -> Dict[str, str]:
-    """
-    Kural-4: Son residue etiketi mümkünse .new dosyasının ATOM/HETATM satırlarından alınır.
-    PDB fixed-column okur:
-      chain  = line[21]
-      resSeq = line[22:26]
-      iCode  = line[26]
-    Dönüş: {chain: last_resid}
-    """
-    if not new_path.exists() or new_path.stat().st_size == 0:
-        return {}
-
-    last_by_chain: Dict[str, str] = {}
-
-    with new_path.open("r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            if not (line.startswith("ATOM") or line.startswith("HETATM")):
-                continue
-            if len(line) < 27:
-                continue
-
-            ch = line[21].strip()
-            resnum = line[22:26].strip()
-            icode = line[26].strip()
-            resid = (resnum + icode).strip()
-
-            if ch and resid:
-                last_by_chain[ch] = resid
-
-    return last_by_chain
-
 
 
 def parse_hinge_file(hinge_path: Path) -> Dict[int, Dict[str, List[Tuple[int, str]]]]:
@@ -396,179 +664,6 @@ def parse_hinge_file(hinge_path: Path) -> Dict[int, Dict[str, List[Tuple[int, st
             modes[m][ch].sort(key=lambda x: x[0])
 
     return modes
-
-
-def _merge_ranges(ranges: List[Tuple[int, int]], n: int) -> List[Tuple[int, int]]:
-    if not ranges:
-        return []
-    rr = []
-    for a, b in ranges:
-        if a > b:
-            a, b = b, a
-        a = max(0, a)
-        b = min(n - 1, b)
-        if a <= b:
-            rr.append((a, b))
-    rr.sort()
-
-    merged: List[Tuple[int, int]] = []
-    for a, b in rr:
-        if not merged:
-            merged.append((a, b))
-        else:
-            pa, pb = merged[-1]
-            if a <= pb + 1:
-                merged[-1] = (pa, max(pb, b))
-            else:
-                merged.append((a, b))
-    return merged
-
-
-def build_parts_with_restart_pair_removal(
-    residue_list: List[str],
-    hinge_entries: List[Tuple[int, str]],
-    min_len: int,
-) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
-    n = len(residue_list)
-    if n == 0:
-        return [], []
-
-    # exact resid -> index
-    idx_map_exact = {rid: i for i, rid in enumerate(residue_list)}
-
-    # numeric part -> first index
-    idx_map_num: Dict[str, int] = {}
-    for i, rid in enumerate(residue_list):
-        num = _leading_int_str(rid)
-        if num is not None and num not in idx_map_num:
-            idx_map_num[num] = i
-
-    start_resnum = _resnum_int(residue_list[0])
-
-    hinges: List[Dict[str, Any]] = []
-    for seq_idx, resid in hinge_entries:
-        resid = str(resid)
-        resid_clean = _strip_trailing_letters(resid)
-
-        # map to position
-        if resid_clean in idx_map_exact:
-            pos = idx_map_exact[resid_clean]
-        else:
-            num = _leading_int_str(resid_clean)
-            if num is not None and num in idx_map_num:
-                pos = idx_map_num[num]
-            else:
-                pos = int(seq_idx) - 1
-                if not (0 <= pos < n):
-                    continue
-
-        # resnum for distance calc: prefer actual residue_list[pos]
-        resnum = _resnum_int(residue_list[pos])
-        if resnum is None:
-            resnum = _resnum_int(resid_clean)
-
-        hinges.append({"seq": int(seq_idx), "pos": int(pos), "resid": resid_clean, "resnum": resnum})
-
-    # deduplicate by position (keep smallest seq for same pos)
-    tmp: Dict[int, Dict[str, Any]] = {}
-    for h in hinges:
-        p = int(h["pos"])
-        if p not in tmp or int(h["seq"]) < int(tmp[p]["seq"]):
-            tmp[p] = h
-
-    hinges = sorted(tmp.values(), key=lambda x: int(x["pos"]))
-
-    removed_frags: List[Tuple[int, int]] = []
-
-    def _gap(i: int, j: int) -> int:
-        hi, hj = hinges[i], hinges[j]
-        ri, rj = hi.get("resnum"), hj.get("resnum")
-        if isinstance(ri, int) and isinstance(rj, int):
-            return abs(int(rj) - int(ri))   # <<< residue ID farkı
-        return abs(int(hj["pos"]) - int(hi["pos"]))  # fallback
-
-    def _head_len() -> int:
-        if not hinges:
-            return 0
-        first = hinges[0].get("resnum")
-        if isinstance(first, int) and isinstance(start_resnum, int):
-            return abs(int(first) - int(start_resnum)) + 1
-        return int(hinges[0]["pos"]) + 1
-
-    # restart loop
-    while True:
-        if not hinges:
-            break
-
-        # --- Kural-1: ilk iki hinge arası ---
-        if len(hinges) >= 2:
-            g12 = _gap(0, 1)
-            if g12 < min_len:
-                h1 = hinges[0]
-                h2 = hinges[1]
-                a = int(h1["pos"]) + 1
-                b = int(h2["pos"])
-                if a <= b:
-                    removed_frags.append((a, b))
-                del hinges[1]
-                del hinges[0]
-                continue
-
-        # --- Kural-1: ilk hinge başlangıç uzaklığı ---
-        if _head_len() < min_len:
-            a = 0
-            b = int(hinges[0]["pos"])
-            if a <= b:
-                removed_frags.append((a, b))
-            del hinges[0]
-            continue
-
-        # --- Kural-2: sonraki hinge çiftlerini bul ---
-        if len(hinges) < 2:
-            break
-
-        removed_any = False
-        for i in range(len(hinges) - 1):
-            g = _gap(i, i + 1)
-            if g < min_len:
-                h1 = hinges[i]
-                h2 = hinges[i + 1]
-                a = int(h1["pos"]) + 1
-                b = int(h2["pos"])
-                if a <= b:
-                    removed_frags.append((a, b))
-                del hinges[i + 1]
-                del hinges[i]
-                removed_any = True
-                break
-
-        if removed_any:
-            continue
-
-        break
-
-    kept_pos = sorted({int(h["pos"]) for h in hinges if 0 <= int(h["pos"]) < n})
-
-    # --- Kural-3: non-overlap parts (index bazlı böl) ---
-    parts: List[Tuple[int, int]] = []
-    if not kept_pos:
-        parts = [(0, n - 1)]
-    else:
-        start = 0
-        for p in kept_pos:
-            if start <= p:
-                parts.append((start, p))
-            start = p + 1
-        if start <= n - 1:
-            parts.append((start, n - 1))
-
-    # >>> NEW: insertion residue(leri) sınırda önceki part'a kat
-    parts = _adjust_parts_for_insertions(parts, residue_list)
-
-    short_frags = _merge_ranges(removed_frags, n)
-    return parts, short_frags
-
-
 
 
 def rigidparts_report_html(
@@ -1513,57 +1608,51 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
             state["last_out_dir"] = dest_out_dir
 
-            # ensure requested filename exists (alias)
-            src_hinge = os.path.join(dest_out_dir, f"{pdb_filename}.hinge")
-            alias_hinges = os.path.join(dest_out_dir, f"{pdb_filename}.new.hinges")
-            if os.path.exists(src_hinge) and not os.path.exists(alias_hinges):
-                try:
-                    shutil.copyfile(src_hinge, alias_hinges)
-                except Exception:
-                    pass
 
-            # ---------- build rigid parts table ----------
+            # ---------- NEW: build table from .new.hinges report (NO calculation) ----------
+
             pdb_chain_path = Path(dest_out_dir) / "pdb"
             if not pdb_chain_path.exists():
-                # fallback: bazı durumlarda sadece orijinal PDB kalır
                 pdb_chain_path = Path(dest_out_dir) / pdb_filename
-
             if not pdb_chain_path.exists():
                 raise RuntimeError(f"Chain PDB file not found (expected 'pdb' or '{pdb_filename}') in: {dest_out_dir}")
 
-            # >>> FIX: hinge_path TANIMLA (ve varlığını kontrol et)
+            # 1) REPORT: *.new.hinges
+            report_file = _find_new_hinges_report(dest_out_dir, pdb_filename)
+            if not report_file:
+                raise RuntimeError(f"Report file not found: expected '{pdb_filename}.new.hinges' in {dest_out_dir}")
+
+            report = parse_new_hinges_report(Path(report_file))
+
+            if not report:
+                raise RuntimeError("Parsed report is empty. Check *.new.hinges content.")
+
+            # 2) RAW HINGES: *.hinge (for Short Flexible Fragments only)
             hinge_path = Path(dest_out_dir) / f"{pdb_filename}.hinge"
             if (not hinge_path.exists()) or (hinge_path.stat().st_size == 0):
-                # istersen sağlamlaştır: diğer olası isimleri de dene
-                alt = _find_hinges_file(dest_out_dir, pdb_filename)
+                alt = _find_hinges_file(dest_out_dir, pdb_filename)  # sende vardı; .hinge bulur
                 if alt:
                     hinge_path = Path(alt)
                 else:
                     raise RuntimeError(f".hinge file not found: {hinge_path}")
-        
+
             residues_by_chain = read_residue_order_from_pdb(pdb_chain_path)
-            
-            modes = parse_hinge_file(hinge_path)   # <<< burada artık OK
+            hinge_modes = parse_hinge_file(hinge_path)
 
-            if not residues_by_chain:
-                raise RuntimeError("No residues parsed from PDB file (ATOM/HETATM expected).")
-            if not modes:
-                raise RuntimeError("No hinge modes parsed from .hinge file.")
-
-            # HingeProt server'daki min_len mantığı (processHinges çağrısında da 15 var)
+            # same min_len spirit as before
             min_len = 14
 
-            # --- Kural-4: .new dosyasından son residue ID'leri oku (mümkünse) ---
-            new_path = Path(dest_out_dir) / f"{pdb_filename}.new"
-            last_resid_by_chain = read_last_residue_id_from_new(new_path) if new_path.exists() else {}
-
-            table_box.value = rigidparts_report_html(
-                pdb_label=pdb_filename,
+            short_frags_by_mode = compute_short_flexible_fragments(
                 residues_by_chain=residues_by_chain,
-                modes=modes,
-                chains_str=captured["chains_str"],
+                hinge_modes=hinge_modes,
+                report=report,
                 min_len=min_len,
-                last_resid_by_chain=last_resid_by_chain,  # NEW
+            )
+
+            table_box.value = rigidparts_report_html_from_report(
+                pdb_label=pdb_filename,
+                report=report,
+                short_frags_by_mode=short_frags_by_mode,
             )
 
 
