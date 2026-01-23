@@ -1459,9 +1459,19 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     viewer_card.add_class("hp-card")
 
     def _viewer_placeholder(msg: str = "Load a PDB to preview it here."):
+        # HTML'i dosyaya yaz ve iframe ile yükle (mode viewer ile aynı yöntem)
+        out_dir = state.get("run_dir") or "/content"
+        html_path = os.path.join(out_dir, f"__hp_mainview_{uuid.uuid4().hex}.html")
+        Path(html_path).write_text(raw, encoding="utf-8")
+
+        iframe_src = f"/files{html_path}"
         with viewer_out:
             clear_output(wait=True)
-            print(msg)
+            display(HTML(
+                f"<iframe src='{iframe_src}' "
+                f"sandbox='allow-scripts allow-same-origin' "
+                f"style='width:{VIEW_W}px;height:{VIEW_H}px;border:1px solid #e5e7eb;border-radius:12px;'></iframe>"
+            ))
 
     _viewer_placeholder()
 
