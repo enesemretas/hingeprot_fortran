@@ -75,7 +75,8 @@ def _ensure_repo(fresh: bool = False) -> str:
     hp = os.path.join(root, "hingeprot")
     url = "https://github.com/enesemretas/hingeprot_fortran.git"
 
-    here = os.path.abspath(__file__)
+    # SAFE: __file__ yoksa cwd kullan
+    here = os.path.abspath(__file__) if "__file__" in globals() else os.path.abspath(os.getcwd())
     running_inside = here.startswith(os.path.abspath(root) + os.sep)
 
     if fresh and not running_inside:
@@ -364,8 +365,9 @@ def compute_short_flexible_fragments(
 
             def gap(i: int, j: int) -> int:
                 ri, rj = hinges[i].get("resnum"), hinges[j].get("resnum")
-                if isinstance(ri, int) and isinstance(rj, int):
+                if isinstance(ri, int) and isinstance(rj, int) and ri != rj:
                     return abs(rj - ri)
+                # resnum yoksa / eşitse -> seq farkı
                 return abs(int(hinges[j]["seq"]) - int(hinges[i]["seq"]))
 
             def head_len() -> int:
@@ -555,10 +557,19 @@ def rigidparts_report_html_from_report(
 # ------------------------- rigid parts report helpers -------------------------
 
 def _parse_pdb_like_chain_resid(line: str) -> Optional[Tuple[str, str]]:
-    """Parse (chain, resid) from ATOM/HETATM lines."""
     if not (line.startswith("ATOM") or line.startswith("HETATM")):
         return None
 
+    # 1) fixed-column (daha güvenli)
+    if len(line) >= 27:
+        chain = line[21].strip()
+        resnum = line[22:26].strip()
+        icode = line[26].strip()
+        resid = (resnum + icode).strip()
+        if chain and resid:
+            return chain, resid
+
+    # 2) fallback split
     parts = line.split()
     if len(parts) >= 6:
         chain = parts[4].strip()
@@ -566,17 +577,7 @@ def _parse_pdb_like_chain_resid(line: str) -> Optional[Tuple[str, str]]:
         if chain and resid:
             return chain, resid
 
-    # fixed-column fallback
-    if len(line) < 27:
-        return None
-    chain = line[21].strip()
-    resnum = line[22:26].strip()
-    icode = line[26].strip()
-    resid = (resnum + icode).strip()
-    if chain and resid:
-        return chain, resid
     return None
-
 
 def read_residue_order_from_pdb(pdb_path: Path) -> Dict[str, List[str]]:
     residues_by_chain: Dict[str, List[str]] = {}
