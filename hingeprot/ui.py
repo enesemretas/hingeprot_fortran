@@ -224,6 +224,26 @@ def read_residue_order_from_pdb(pdb_path: Path) -> Dict[str, List[str]]:
 
 
 
+def _strip_trailing_letters(resid: str) -> str:
+    """
+    If resid looks like pure integer followed by letters (e.g., '123A', '45BC'),
+    strip trailing letters -> '123'. Otherwise return as-is.
+    """
+    t = (resid or "").strip()
+    m = re.match(r"^(-?\d+)[A-Za-z]+$", t)
+    return m.group(1) if m else t
+
+
+def _leading_int_str(resid: str) -> Optional[str]:
+    """
+    Extract leading integer part from a resid token (e.g., '123A' -> '123', '123'->'123').
+    Returns None if no leading integer exists.
+    """
+    t = (resid or "").strip()
+    m = re.match(r"^(-?\d+)", t)
+    return m.group(1) if m else None
+
+
 def parse_hinge_file(hinge_path: Path) -> Dict[int, Dict[str, List[Tuple[int, str]]]]:
     """
     Parses a .hinge file with headers like:
@@ -266,10 +286,13 @@ def parse_hinge_file(hinge_path: Path) -> Dict[int, Dict[str, List[Tuple[int, st
             except Exception:
                 continue
 
-            resid_token = parts[-2].strip()
+            resid_token_raw = parts[-2].strip()
             chain = parts[-1].strip()[:1]
-            if not resid_token or not chain:
+            if not resid_token_raw or not chain:
                 continue
+
+            # (1) resid sonundaki harf(ler)i at (chain zaten ayrı)
+            resid_token = _strip_trailing_letters(resid_token_raw)
 
             modes.setdefault(mode, {}).setdefault(chain, []).append((seq_idx, resid_token))
 
@@ -312,30 +335,54 @@ def build_parts_with_restart_pair_removal(
     min_len: int,
 ) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
     """
-    - seq_idx-gap < min_len olan komşu hinge çiftleri içinden EN KÜÇÜK gap seçilir
-    - o çiftin İKİ hinge'i de kaldırılır
-    - her kaldırmadan sonra baştan taranır (restart)
-    Returns:
-      parts_idx: rigid parts index ranges
-      short_frags: removed short fragments index ranges (merged)
+    Kurallar:
+    (2) HER restart döngüsünde önce N-terminus -> ilk hinge mesafesini kontrol et:
+        Eğer ilk hinge baştan < min_len ise, o hinge'i SİL ve restart et.
+    Sonra:
+      - komşu hinge çiftleri arasında gap < min_len olanlar içinden EN KÜÇÜK gap seçilir
+      - o çiftin İKİ hinge'i de kaldırılır
+      - her kaldırmadan sonra baştan taranır (restart)
+
+    (3) Rigid parts aralıkları overlap boundary olacak şekilde yazılır:
+        [0..h1], [h1..h2], ..., [hlast..n-1]
+        Böylece son part: son hinge -> son residue.
     """
     n = len(residue_list)
     if n == 0:
         return [], []
 
-    idx_map = {rid: i for i, rid in enumerate(residue_list)}
+    # exact resid -> index
+    idx_map_exact = {rid: i for i, rid in enumerate(residue_list)}
+
+    # numeric part -> first index (helps matching when hinge file drops insertion letters)
+    idx_map_num: Dict[str, int] = {}
+    for i, rid in enumerate(residue_list):
+        num = _leading_int_str(rid)
+        if num is not None and num not in idx_map_num:
+            idx_map_num[num] = i
 
     hinges: List[Dict[str, Any]] = []
     for seq_idx, resid in hinge_entries:
-        if resid in idx_map:
-            pos = idx_map[resid]
-        else:
-            pos = seq_idx - 1
-            if not (0 <= pos < n):
-                continue
-        hinges.append({"seq": int(seq_idx), "pos": int(pos), "resid": str(resid)})
+        resid = str(resid)
+        # resid token zaten parse_hinge_file içinde trailing-letter temizlenmiş olabilir,
+        # yine de güvenli davranalım:
+        resid_clean = _strip_trailing_letters(resid)
 
-    # deduplicate by position
+        if resid_clean in idx_map_exact:
+            pos = idx_map_exact[resid_clean]
+        else:
+            num = _leading_int_str(resid_clean)
+            if num is not None and num in idx_map_num:
+                pos = idx_map_num[num]
+            else:
+                # fallback: seq_idx (1-based) -> pos (0-based)
+                pos = seq_idx - 1
+                if not (0 <= pos < n):
+                    continue
+
+        hinges.append({"seq": int(seq_idx), "pos": int(pos), "resid": resid_clean})
+
+    # deduplicate by position (keep smallest seq for same pos)
     tmp: Dict[int, Dict[str, Any]] = {}
     for h in hinges:
         p = int(h["pos"])
@@ -356,9 +403,21 @@ def build_parts_with_restart_pair_removal(
                     best_i = i
         return best_i
 
+    # restart loop
     while True:
+        if not hinges:
+            break
+
+        # (2) first hinge distance from N-terminus (using pos -> actual residue list distance)
+        head_len = int(hinges[0]["pos"]) + 1  # length of [0..first_hinge]
+        if head_len < min_len:
+            # sadece hinge'i sil, restart et (short-frag olarak raporlamıyoruz)
+            del hinges[0]
+            continue
+
         if len(hinges) < 2:
             break
+
         i = _pick_pair_index(hinges)
         if i is None:
             break
@@ -366,27 +425,34 @@ def build_parts_with_restart_pair_removal(
         h1 = hinges[i]
         h2 = hinges[i + 1]
 
+        # short fragment between hinges (exclude first hinge, include second boundary as önceki kod)
         a = int(h1["pos"]) + 1
         b = int(h2["pos"])
         if a <= b:
             removed_frags.append((a, b))
 
+        # remove both hinges and restart
         del hinges[i + 1]
         del hinges[i]
+        # loop continues => head check happens again automatically
 
     kept_pos = sorted({int(h["pos"]) for h in hinges if 0 <= int(h["pos"]) < n})
 
+    # (3) Build rigid parts with overlap boundaries:
+    # [0..h1], [h1..h2], ..., [hlast..n-1]
     parts: List[Tuple[int, int]] = []
-    start = 0
-    for p in kept_pos:
-        if start <= p:
-            parts.append((start, p))
-        start = p + 1
-    if start <= n - 1:
-        parts.append((start, n - 1))
-    if not parts:
+    if not kept_pos:
         parts = [(0, n - 1)]
+    else:
+        start = 0
+        for p in kept_pos:
+            if start <= p:
+                parts.append((start, p))
+            start = p  # overlap: next part starts at hinge itself
+        if start <= n - 1:
+            parts.append((start, n - 1))
 
+    # keep old merge behavior for reported short fragments
     short_frags = _merge_ranges(removed_frags, n)
     return parts, short_frags
 
