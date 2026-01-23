@@ -1551,7 +1551,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 raise RuntimeError("No hinge modes parsed from .hinge file.")
 
             # HingeProt server'daki min_len mantığı (processHinges çağrısında da 15 var)
-            min_len = 15
+            min_len = 14
 
             # --- Kural-4: .new dosyasından son residue ID'leri oku (mümkünse) ---
             new_path = Path(dest_out_dir) / f"{pdb_filename}.new"
