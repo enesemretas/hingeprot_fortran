@@ -566,8 +566,6 @@ def rigidparts_report_widget_from_report(
     short_frags_by_mode: dict[int, list[str]],
     out_dir: str,
     download_fn,
-    mode_viewer_fn=None,      # <-- NEW
-    ref_pdb_path: str | None = None,  # <-- NEW (isteğe bağlı)
 ) -> W.VBox:
 
     def _css_cell() -> str:
@@ -576,13 +574,8 @@ def rigidparts_report_widget_from_report(
     blocks: list[W.Widget] = []
 
     for mode in sorted(report.keys()):
-        # --- NEW: Mode 1/2 mini-viewer (başlığın üstüne, ortalı) ---
-        if mode_viewer_fn is not None and mode in (1, 2):
-            mfile = os.path.join(out_dir, f"{pdb_label}.mode{mode}.pdb")
-            if os.path.exists(mfile) and os.path.getsize(mfile) > 0:
-                blocks.append(mode_viewer_fn(mfile))
 
- 
+
         # --- header text ---
         header_text = W.HTML(
             f"<div style='width:100%; text-align:center; color:#dc2626; font-weight:900;'>"
@@ -1481,6 +1474,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         "_syncing": False,
         "hingeprot_dir": None,
         "last_out_dir": None,
+        "mode_files": {},   # {1: "/path/...mode1.pdb", 2: "/path/...mode2.pdb"}
     }
     global LAST_UI_STATE
     LAST_UI_STATE = state
@@ -1869,6 +1863,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
             state["last_out_dir"] = dest_out_dir
 
+
+            
+
             # NEW: Outputs altına bilgilendirme satırı
             fname = captured["pdb_filename"] or "PDB"
             chains_str = captured["chains_str"] or ""
@@ -1879,6 +1876,15 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 f"{_safe_html(fname)} for Chain(s) : {_safe_html(chains_pretty)}"
                 "</div>"
             )
+
+            # ---------- NEW: fill SINGLE Mode Viewer ----------
+            mode_files = {}
+            for m in (1, 2):
+                p = os.path.join(dest_out_dir, f"{pdb_filename}.mode{m}.pdb")
+                if os.path.exists(p) and os.path.getsize(p) > 0:
+                    mode_files[m] = p
+
+            _set_mode_viewer_files(mode_files)
 
 
 
@@ -1922,16 +1928,19 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 min_len=min_len,
             )
 
-            table_box.children = (
-                rigidparts_report_widget_from_report(
-                    pdb_label=pdb_filename,
-                    report=report,
-                    short_frags_by_mode=short_frags_by_mode,
-                    out_dir=dest_out_dir,
-                    download_fn=_download_file,
-                    mode_viewer_fn=_make_mode_viewer,               # <-- NEW
-                ),
+            rigid_widget = rigidparts_report_widget_from_report(
+                pdb_label=pdb_filename,
+                report=report,
+                short_frags_by_mode=short_frags_by_mode,
+                out_dir=dest_out_dir,
+                download_fn=_download_file,
             )
+
+            table_box.children = (
+                mode_viewer_card,
+                rigid_widget,
+            )
+
 
 
 
@@ -1970,6 +1979,15 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         all_chains.value = False
         chains_wrap.children = ()
         output_info.value = ""
+        
+        # reset SINGLE Mode Viewer
+        state["mode_files"] = {}
+        mode_viewer_card.layout.display = "none"
+        mode_select.disabled = True
+        mode_dl.disabled = True
+        _mode_placeholder()
+
+        
 
         global LAST_INPUTS
         LAST_INPUTS = None
@@ -2005,6 +2023,102 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
     # NEW: run sonrası bilgi satırı
     output_info = W.HTML("", layout=W.Layout(width="100%"))
+
+    # ---------- Outputs: SINGLE Mode Viewer (updates on Mode 1/2) ----------
+    mode_title = W.HTML("<b>Mode Viewer</b>")
+
+    mode_select = W.ToggleButtons(
+        options=[("Mode 1", 1), ("Mode 2", 2)],
+        value=1,
+        style={"button_width": "120px"},
+        layout=W.Layout(width="260px"),
+    )
+    mode_select.disabled = True
+
+    mode_dl = W.Button(
+        description="Download current mode.pdb",
+        icon="download",
+        layout=W.Layout(width="260px"),
+    )
+    mode_dl.disabled = True
+
+    mode_view_container = W.Output(
+        layout=W.Layout(
+            width="100%",
+            height="320px",
+            border="1px solid #e5e7eb",
+            border_radius="12px",
+            padding="6px",
+            overflow="hidden",
+        )
+    )
+
+    # Bu kart output içinde tek bir viewer alanı olacak
+    mode_viewer_card = W.VBox(
+        [
+            mode_title,
+            W.HBox([mode_select, mode_dl], layout=W.Layout(gap="10px", align_items="center")),
+            mode_view_container,
+        ],
+        layout=W.Layout(width="100%", gap="8px"),
+    )
+    mode_viewer_card.add_class("hp-card")
+    mode_viewer_card.layout.display = "none"  # ilk başta gizli
+
+    def _mode_placeholder(msg: str = "Run HingeProt to generate mode files."):
+        with mode_view_container:
+            clear_output(wait=True)
+            print(msg)
+
+    _mode_placeholder()
+
+    def _render_mode(m: int):
+        """Tek viewer alanını seçilen mode ile güncelle."""
+        mf = state.get("mode_files", {}) or {}
+        if m not in mf:
+            _mode_placeholder("Selected mode file not found.")
+            return
+        with mode_view_container:
+            clear_output(wait=True)
+            display(_make_mode_viewer(mf[m]))  # senin mevcut viewer fonksiyonun
+
+    def _set_mode_viewer_files(mode_files: dict[int, str]):
+        """
+        Run bitince çağrılacak:
+        - hangi mode dosyaları var -> options
+        - seçili mode -> viewer render
+        - butonları enable et
+        """
+        state["mode_files"] = mode_files or {}
+
+        if not mode_files:
+            mode_viewer_card.layout.display = "none"
+            mode_select.disabled = True
+            mode_dl.disabled = True
+            _mode_placeholder("No mode PDB produced.")
+            return
+
+        opts = [(f"Mode {m}", m) for m in sorted(mode_files.keys())]
+        mode_select.options = opts
+        mode_select.value = opts[0][1]          # ilk mevcut mode
+        mode_select.disabled = False
+        mode_dl.disabled = False
+        mode_viewer_card.layout.display = ""    # görünür yap
+        _render_mode(int(mode_select.value))
+
+    def _on_mode_change(ch):
+        _render_mode(int(ch["new"]))
+
+    mode_select.observe(_on_mode_change, names="value")
+
+    def _download_current_mode(_):
+        mf = state.get("mode_files", {}) or {}
+        m = int(mode_select.value)
+        if m in mf:
+            _download_file(mf[m])
+
+    mode_dl.on_click(_download_current_mode)
+
 
     output_card = W.VBox(
         [output_title, output_info, table_box, status_box],
