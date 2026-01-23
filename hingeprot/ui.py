@@ -580,7 +580,8 @@ def rigidparts_report_widget_from_report(
         if mode_viewer_fn is not None and mode in (1, 2):
             mfile = os.path.join(out_dir, f"{pdb_label}.mode{mode}.pdb")
             if os.path.exists(mfile) and os.path.getsize(mfile) > 0:
-                blocks.append(mode_viewer_fn(mfile, ref_pdb_path))
+                blocks.append(mode_viewer_fn(mfile))
+
  
         # --- header text ---
         header_text = W.HTML(
@@ -918,10 +919,29 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             out_lines.append(ln)
         return "\n".join(out_lines).rstrip() + "\n"
 
-    def _make_mode_viewer(mode_pdb_path: str, ref_pdb_path: str | None = None) -> W.Widget:
+    def _bfactor_minmax(pdb_text: str) -> tuple[float, float]:
+        mn = None
+        mx = None
+        for ln in pdb_text.splitlines():
+            if not ln.startswith(("ATOM", "HETATM")):
+                continue
+            if len(ln) < 66:
+                continue
+            try:
+                b = float(ln[60:66])
+            except Exception:
+                continue
+            mn = b if mn is None else min(mn, b)
+            mx = b if mx is None else max(mx, b)
+        if mn is None or mx is None:
+            return (0.0, 100.0)
+        if abs(mx - mn) < 1e-9:
+            return (mn - 1.0, mx + 1.0)
+        return (mn, mx)
+
+    def _make_mode_viewer(mode_pdb_path: str) -> W.Widget:
         """
-        Mode PDB'yi Slowest Mode başlığının üstünde göstermek için mini py3Dmol viewer.
-        ref_pdb_path verilirse: ref + mode => 2 frame animasyon (back and forth).
+        modeX.pdb içindeki çoklu MODEL framelerini oynatır ve beta-factor'a göre renklendirir.
         """
         py3Dmol = _ensure_py3dmol()
 
@@ -939,35 +959,46 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             )
         )
 
+        pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
+        bmin, bmax = _bfactor_minmax(pdb_text)
+
         with box:
             clear_output(wait=True)
 
             v = py3Dmol.view(width=MODE_W, height=MODE_H)
             v.setBackgroundColor("white")
 
-            if ref_pdb_path and os.path.exists(ref_pdb_path):
-                ref_txt  = _read_pdb_for_frames(ref_pdb_path)
-                mode_txt = _read_pdb_for_frames(mode_pdb_path)
+            # ÖNEMLİ: MODEL/ENDMDL'yi SİLME! Dosya zaten 11 frame içeriyor.
+            v.addModelsAsFrames(pdb_text, "pdb")
 
-                multi = (
-                    "MODEL 1\n" + ref_txt  + "ENDMDL\n"
-                    "MODEL 2\n" + mode_txt + "ENDMDL\n"
-                )
-                v.addModelsAsFrames(multi, "pdb")
-                v.setStyle({}, {"cartoon": {"color": "lightgray"}})
-                v.zoomTo()
-                v.animate({"loop": "backAndForth", "reps": 0, "interval": 160})
-            else:
-                mode_txt = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
-                v.addModel(mode_txt, "pdb")
-                v.setStyle({}, {"cartoon": {"color": "lightgray"}})
-                v.zoomTo()
+            # Beta-factor (B) ile renklendirme
+            v.setStyle(
+                {},
+                {
+                    "cartoon": {
+                        "colorscheme": {
+                            "prop": "b",
+                            "gradient": "rwb",
+                            "min": float(bmin),
+                            "max": float(bmax),
+                        }
+                    }
+                },
+            )
+
+            # İstersen ligandları da göstermek için aç:
+            # v.setStyle({"hetflag": True, "not": {"resn": ["HOH", "WAT", "DOD"]}}, {"stick": {}, "sphere": {"scale": 0.25}})
+
+            v.zoomTo()
+            v.setFrame(0)
+
+            # Tüm frameleri sırayla oynat
+            v.animate({"loop": "backAndForth", "reps": 0, "interval": 200})
 
             raw = v._make_html()
             raw = _html_with_unique_divid(raw)
             display(HTML(raw))
 
-        # ortalamak için HBox ile sar
         return W.HBox([box], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
 
 
@@ -1807,7 +1838,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                     out_dir=dest_out_dir,
                     download_fn=_download_file,
                     mode_viewer_fn=_make_mode_viewer,               # <-- NEW
-                    ref_pdb_path=str(pdb_chain_path),               # <-- NEW (pdb + mode animasyonu için)
                 ),
             )
 
