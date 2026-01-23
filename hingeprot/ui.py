@@ -10,7 +10,7 @@ import subprocess
 
 import requests
 import ipywidgets as W
-from IPython.display import display, clear_output, HTML
+from IPython.display import display, clear_output, HTML, FileLink
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
@@ -560,6 +560,98 @@ def rigidparts_report_html_from_report(
 
     return "<div style='font-family:Arial, Helvetica, sans-serif;'>" + "".join(blocks) + "</div>"
 
+def rigidparts_report_widget_from_report(
+    pdb_label: str,
+    report: dict[int, dict[str, object]],
+    short_frags_by_mode: dict[int, list[str]],
+    out_dir: str,
+    download_fn,  # _download_file
+) -> W.VBox:
+    def _css_cell() -> str:
+        return "padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;"
+
+    blocks: list[W.Widget] = []
+
+    for mode in sorted(report.keys()):
+        # --- header text ---
+        header_text = W.HTML(
+            f"<span style='color:#dc2626;font-weight:900;'>----&gt; slowest mode {mode}: {pdb_label}</span>"
+        )
+
+        # --- inline download button (text'in hemen sonrasında) ---
+        btn = None
+        if mode in (1, 2):
+            fname = f"{pdb_label}.mode{mode}.pdb"  # 4cln.pdb.mode1.pdb
+            fpath = os.path.join(out_dir, fname)
+            if os.path.exists(fpath) and os.path.getsize(fpath) > 0:
+                btn = W.Button(
+                    description=f"Download mode{mode}.pdb",
+                    button_style="",  # istersen "info"
+                    icon="download",
+                    layout=W.Layout(width="200px"),
+                )
+                btn.on_click(lambda _b, p=fpath: download_fn(p))
+
+        header_row = W.HBox(
+            [header_text] + ([btn] if btn is not None else []),
+            layout=W.Layout(align_items="center", gap="8px"),
+        )
+        blocks.append(header_row)
+
+        # --- body html (table + hinge + short fragments) ---
+        n_parts = report[mode].get("n_parts", None)
+        parts = list(report[mode].get("parts", []) or [])
+        rows = []
+        for pno, residues_str in parts:
+            rows.append(
+                f"<tr>"
+                f"<td style='{_css_cell()}'>{pno}</td>"
+                f"<td style='{_css_cell()}'>{residues_str}</td>"
+                f"</tr>"
+            )
+
+        hinge_tokens = list(report[mode].get("hinge_tokens", []) or [])
+        hinge_line = " ".join(hinge_tokens) if hinge_tokens else "-"
+
+        frags = short_frags_by_mode.get(mode, []) or []
+        if frags:
+            items = [f"<div style='margin:2px 0;'>{k}. {frag}</div>" for k, frag in enumerate(frags, start=1)]
+            short_html = (
+                "<div style='margin-top:10px;color:#dc2626;font-weight:900;'>Short Flexible Fragments:</div>"
+                + "".join(items)
+            )
+        else:
+            short_html = (
+                "<div style='margin-top:10px;color:#dc2626;font-weight:900;'>Short Flexible Fragments:</div>"
+                "<div style='margin:2px 0;'>-</div>"
+            )
+
+        body_html = "<div style='font-family:Arial, Helvetica, sans-serif;'>"
+        if isinstance(n_parts, int):
+            body_html += f"<div style='margin:4px 0 8px 0;font-weight:800;'># of rigid parts: {n_parts}</div>"
+
+        body_html += (
+            f"<div style='margin:8px 0 14px 0;'>"
+            f"<table style='width:100%;border-collapse:collapse;'>"
+            f"<thead><tr>"
+            f"<th style='text-align:left;{_css_cell()}border-bottom:2px solid #e5e7eb;'>Rigid Part No</th>"
+            f"<th style='text-align:left;{_css_cell()}border-bottom:2px solid #e5e7eb;'>Residues</th>"
+            f"</tr></thead>"
+            f"<tbody>{''.join(rows) if rows else ''}</tbody>"
+            f"</table>"
+            f"<div style='margin-top:6px;color:#1d4ed8;font-weight:900;'>Hinge residues: {hinge_line}</div>"
+            f"{short_html}"
+            f"</div>"
+            f"</div>"
+        )
+
+        blocks.append(W.HTML(body_html))
+
+    return W.VBox(blocks, layout=W.Layout(width="100%", gap="6px"))
+
+
+
+
 
 # ------------------------- rigid parts report helpers -------------------------
 
@@ -1092,12 +1184,27 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     btn_run_fortran = W.Button(description="Run HingeProt", button_style="primary", icon="play", layout=W.Layout(width="320px"))
     btn_clear = W.Button(description="Clear", button_style="warning", icon="trash", layout=W.Layout(width="180px"))
 
-    table_box = W.HTML("<div></div>")
+    table_box = W.VBox([], layout=W.Layout(width="100%", gap="8px"))
 
     status_box = W.HTML('<div class="hp-pre">Load a PDB to detect chains.</div>')
 
     def _set_status(text: str):
         status_box.value = f'<div class="hp-pre">{_safe_html(text)}</div>'
+
+    def _download_file(path: str):
+        path = os.path.abspath(path)
+        if (not os.path.exists(path)) or os.path.getsize(path) == 0:
+            _set_status(f"ERROR: file not found or empty:\n{path}")
+            return
+        # Colab'ta doğrudan indir
+        try:
+            from google.colab import files  # type: ignore
+            files.download(path)
+            return
+        except Exception:
+            # Local Jupyter vb. için link göster
+            display(FileLink(path))
+
 
     # ---------- viewer (boxed like form; same width & stretchable height) ----------
     CARD_W = 620
@@ -1393,7 +1500,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     # ---------- actions ----------
     def on_load_clicked(_):
         progress.value = 0
-        table_box.value = "<div></div>"
+        table_box.children = ()
         progress.bar_style = "info"
         state["last_out_dir"] = None
 
@@ -1504,7 +1611,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             captured = _capture_inputs()
             global LAST_INPUTS
             LAST_INPUTS = captured
-            table_box.value = "<div style='font-family:Arial; color:#6b7280;'>Running HingeProt…</div>"
+            table_box.children = (W.HTML("<div style='font-family:Arial; color:#6b7280;'>Running HingeProt…</div>"),)
             progress.value = 1
             _ensure_libg2c()
 
@@ -1587,11 +1694,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 min_len=min_len,
             )
 
-            table_box.value = rigidparts_report_html_from_report(
-                pdb_label=pdb_filename,
-                report=report,
-                short_frags_by_mode=short_frags_by_mode,
-                out_dir=dest_out_dir,  # NEW
+            table_box.children = (
+                rigidparts_report_widget_from_report(
+                    pdb_label=pdb_filename,
+                    report=report,
+                    short_frags_by_mode=short_frags_by_mode,
+                    out_dir=dest_out_dir,          # senin path burada
+                    download_fn=_download_file,    # NEW
+                ),
             )
 
 
@@ -1601,12 +1711,12 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
         except Exception as e:
             progress.bar_style = "danger"
-            table_box.value = "<div style='color:#dc2626;font-weight:800;'>ERROR</div>"
+            table_box.children = (W.HTML("<div style='color:#dc2626;font-weight:800;'>ERROR</div>"),)
             _set_status(f"ERROR: {e}")
 
     def on_clear_clicked(_):
         pdb_code.value = ""
-        table_box.value = "<div></div>"
+        table_box.children = ()
         input_mode.value = "code"
         state["upload_name"] = None
         state["upload_bytes"] = None
