@@ -941,85 +941,86 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
     def _make_mode_viewer(mode_pdb_path: str) -> W.Widget:
         """
-        modeX.pdb içindeki MODEL framelerini oynatır ve beta-factor'a göre renklendirir.
-        En stabil yol: py3Dmol HTML'ini iframe srcdoc içine gömerek izole etmek.
-        Böylece localhost / /files bağımlılığı ve JS çakışmaları ortadan kalkar.
+        modeX.pdb'i py3Dmol ile gösterir (beta-factor renklendirme).
+        Colab'da script çalışması için W.HTML yerine W.Output + display(HTML(...)) kullanılır.
         """
         py3Dmol = _ensure_py3dmol()
-
+    
         MODE_W = 560
         MODE_H = 280
-
-        holder = W.HTML(
-            value="<div style='font-family:Arial;color:#6b7280;'>Rendering 3D view…</div>",
-            layout=W.Layout(width=f"{MODE_W}px", height=f"{MODE_H}px"),
-        )
-
-        try:
-            pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
-            if not pdb_text.strip():
-                raise RuntimeError("Empty PDB text.")
-
-            bmin, bmax = _bfactor_minmax(pdb_text)
-
-            # Kaç frame var?
-            nframes = len(re.findall(r"^MODEL\b", pdb_text, flags=re.M))
     
-            v = py3Dmol.view(width=MODE_W, height=MODE_H)
-            v.setBackgroundColor("white")
-
-            if nframes >= 2:
-                v.addModelsAsFrames(pdb_text, "pdb")
-            else:
-                v.addModel(pdb_text, "pdb")
-
-            # B-factor ile renklendirme
-            style = {
-                "cartoon": {
-                    "colorscheme": {
-                        "prop": "b",
-                        "gradient": "roygb",
-                        "min": float(bmin),
-                        "max": float(bmax),
+        out = W.Output(
+            layout=W.Layout(
+                width=f"{MODE_W}px",
+                height=f"{MODE_H}px",
+                border="1px solid #e5e7eb",
+                border_radius="12px",
+                padding="0px",
+                overflow="hidden",
+            )
+        )
+    
+        with out:
+            clear_output(wait=True)
+            try:
+                pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
+                if not pdb_text.strip():
+                    raise RuntimeError("Empty PDB text.")
+    
+                # Eğer MODEL var ama ENDMDL yoksa, py3Dmol bazen sorun çıkarabiliyor -> temizle
+                has_model = bool(re.search(r"^MODEL\b", pdb_text, flags=re.M))
+                has_endmdl = bool(re.search(r"^ENDMDL\b", pdb_text, flags=re.M))
+                if has_model and not has_endmdl:
+                    pdb_text = _read_pdb_for_frames(mode_pdb_path)
+    
+                bmin, bmax = _bfactor_minmax(pdb_text)
+    
+                # Kaç frame? (MODEL + ENDMDL birlikteyse güvenli)
+                nframes = 0
+                if has_model and has_endmdl:
+                    nframes = len(re.findall(r"^MODEL\b", pdb_text, flags=re.M))
+    
+                v = py3Dmol.view(width=MODE_W, height=MODE_H)
+                v.setBackgroundColor("white")
+    
+                if nframes >= 2:
+                    v.addModelsAsFrames(pdb_text, "pdb")
+                else:
+                    v.addModel(pdb_text, "pdb")
+    
+                style = {
+                    "cartoon": {
+                        "colorscheme": {
+                            "prop": "b",
+                            "gradient": "roygb",
+                            "min": float(bmin),
+                            "max": float(bmax),
+                        }
                     }
                 }
-            }
-
-            if nframes >= 2:
-                # tüm framelere uygula
-                for i in range(nframes):
-                    v.setStyle({"model": i}, style)
-                v.setFrame(0)
-                v.zoomTo()
-                v.animate({"loop": "forward", "reps": 0, "interval": 180})
-            else:
-                v.setStyle({}, style)
-                v.zoomTo()
-
-            raw = v._make_html()
-            raw = _html_with_unique_divid(raw)
-
-            # ---- iframe srcdoc ile izole et (localhost hatasını kesin çözer) ----
-            import html as _htmlmod
-            srcdoc = _htmlmod.escape(raw, quote=True)
-
-            holder.value = (
-                f"<iframe "
-                f"sandbox='allow-scripts' "
-                f"srcdoc=\"{srcdoc}\" "
-                f"style='width:{MODE_W}px;height:{MODE_H}px;"
-                f"border:1px solid #e5e7eb;border-radius:12px;'"
-                f"></iframe>"
-            )
-
-        except Exception as e:
-            holder.value = (
-                "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
-                f"Viewer error: {_safe_html(str(e))}"
-                "</div>"
-            )
-
-        return W.HBox([holder], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
+    
+                if nframes >= 2:
+                    for i in range(nframes):
+                        v.setStyle({"model": i}, style)
+                    v.setFrame(0)
+                    v.zoomTo()
+                    v.animate({"loop": "forward", "reps": 0, "interval": 180})
+                else:
+                    v.setStyle({}, style)
+                    v.zoomTo()
+    
+                raw = v._make_html()
+                raw = _html_with_unique_divid(raw)
+                display(HTML(raw))
+    
+            except Exception as e:
+                display(HTML(
+                    "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
+                    f"Viewer error: {_safe_html(str(e))}"
+                    "</div>"
+                ))
+    
+        return W.HBox([out], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
 
 
     
