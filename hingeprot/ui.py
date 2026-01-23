@@ -509,7 +509,7 @@ def rigidparts_report_html_from_report(
 
         blocks.append(
             f"<div class='hp-modebar'>"
-            f"  <div style='color:#dc2626;font-weight:900;'>----&gt; slowest mode {mode}: {pdb_label}</div>"
+            f"  <div class='hp-modetitle' style='color:#dc2626;font-weight:900;'>----&gt; Slowest Mode {mode}: {pdb_label}</div>"
             f"  {btn_html}"
             f"</div>"
         )
@@ -553,7 +553,7 @@ def rigidparts_report_html_from_report(
             f"</tr></thead>"
             f"<tbody>{''.join(rows) if rows else ''}</tbody>"
             f"</table>"
-            f"<div style='margin-top:6px;color:#1d4ed8;font-weight:900;'>Hinge residues: {hinge_line}</div>"
+            f"<div style='margin-top:6px;color:#1d4ed8;font-weight:900; text-align:center;'>Hinge residues: {hinge_line}</div>"
             f"{short_html}"
             f"</div>"
         )
@@ -575,8 +575,12 @@ def rigidparts_report_widget_from_report(
     for mode in sorted(report.keys()):
         # --- header text ---
         header_text = W.HTML(
-            f"<span style='color:#dc2626;font-weight:900;'>----&gt; slowest mode {mode}: {pdb_label}</span>"
+            f"<div style='width:100%; text-align:center; color:#dc2626; font-weight:900;'>"
+            f"----&gt; Slowest Mode {mode}: {pdb_label}"
+            f"</div>",
+            layout=W.Layout(width="100%"),
         )
+
 
         # --- inline download button (text'in hemen sonrasında) ---
         btn = None
@@ -592,11 +596,13 @@ def rigidparts_report_widget_from_report(
                 )
                 btn.on_click(lambda _b, p=fpath: download_fn(p))
 
-        header_row = W.HBox(
-            [header_text] + ([btn] if btn is not None else []),
-            layout=W.Layout(align_items="center", gap="8px"),
-        )
-        blocks.append(header_row)
+        blocks.append(header_text)
+
+        if btn is not None:
+            blocks.append(
+                W.HBox([btn], layout=W.Layout(justify_content="flex-end"))
+            )
+
 
         # --- body html (table + hinge + short fragments) ---
         n_parts = report[mode].get("n_parts", None)
@@ -639,7 +645,7 @@ def rigidparts_report_widget_from_report(
             f"</tr></thead>"
             f"<tbody>{''.join(rows) if rows else ''}</tbody>"
             f"</table>"
-            f"<div style='margin-top:6px;color:#1d4ed8;font-weight:900;'>Hinge residues: {hinge_line}</div>"
+            f"<div style='margin-top:6px;color:#1d4ed8;font-weight:900; text-align:center;'>Hinge residues: {hinge_line}</div>"
             f"{short_html}"
             f"</div>"
             f"</div>"
@@ -1066,13 +1072,24 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       color: #6b7280;
     }
 
-        .hp-modebar{
+    .hp-modebar{
+      position:relative;
       display:flex;
       align-items:center;
-      justify-content:space-between;
+      justify-content:center;
       gap:10px;
       margin:10px 0 6px 0;
     }
+ 
+    .hp-modetitle{
+      width:100%;
+      text-align:center;
+    }
+    .hp-modebar .hp-dlbtn{
+      position:absolute;
+      right:0;
+    }
+    
     .hp-dlbtn{
       display:inline-block;
       padding:6px 10px;
@@ -1653,6 +1670,18 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
             state["last_out_dir"] = dest_out_dir
 
+            # NEW: Outputs altına bilgilendirme satırı
+            fname = captured["pdb_filename"] or "PDB"
+            chains_str = captured["chains_str"] or ""
+            chains_pretty = ", ".join(list(chains_str)) if chains_str else "-"
+            output_info.value = (
+                "<div style='text-align:center; font-family:Arial, Helvetica, sans-serif;"
+                "font-weight:800; color:#111827; margin:2px 0 6px 0;'>"
+                f"{_safe_html(fname)} for Chain(s) : {_safe_html(chains_pretty)}"
+                "</div>"
+            )
+
+
 
             # ---------- NEW: build table from .new.hinges report (NO calculation) ----------
 
@@ -1739,6 +1768,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         state["_syncing"] = False
         all_chains.value = False
         chains_wrap.children = ()
+        output_info.value = ""
 
         global LAST_INPUTS
         LAST_INPUTS = None
@@ -1770,8 +1800,16 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     )
     form_card.add_class("hp-card")
 
-    output_title = W.HTML("<b>Rigid Parts & Short Flexible Fragments</b>")
-    output_card = W.VBox([output_title, table_box, status_box], layout=W.Layout(width="100%", gap="8px"))
+    output_title = W.HTML("<b>Outputs</b>")
+
+    # NEW: run sonrası bilgi satırı
+    output_info = W.HTML("", layout=W.Layout(width="100%"))
+
+    output_card = W.VBox(
+        [output_title, output_info, table_box, status_box],
+        layout=W.Layout(width="100%", gap="8px"),
+    )
+
     output_card.add_class("hp-card")
 
     # wrap: dar ekranda alt alta düşsün; stretch: aynı hizada bitsin
