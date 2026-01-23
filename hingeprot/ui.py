@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import json
 import datetime
 import base64
 import uuid
@@ -13,7 +12,7 @@ import requests
 import ipywidgets as W
 from IPython.display import display, clear_output, HTML
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional
 
 
 
@@ -299,18 +298,15 @@ def _resnum_int(resid: str) -> int | None:
     except Exception:
         return None
 
-def _token_to_resid_chain(tok: str) -> tuple[str | None, str | None]:
-    """
-    Hinge residues token like '116A' -> resid='116', chain='A'
-    """
-    t = (tok or "").strip()
-    if len(t) < 2:
-        return None, None
-    chain = t[-1]
-    resid = t[:-1]
-    if not chain.strip() or not resid.strip():
-        return None, None
-    return resid.strip(), chain.strip()
+
+def _fmt_resid_with_chain(resid: object, ch: str) -> str:
+    s = str(resid).strip()
+    if not s:
+        return s
+    # zaten zincir harfiyle bitiyorsa tekrar ekleme
+    if s[-1].isalpha() and s[-1].upper() == ch.upper():
+        return s
+    return f"{s}{ch}"
 
 def compute_short_flexible_fragments(
     residues_by_chain: dict[str, list[str]],
@@ -346,9 +342,15 @@ def compute_short_flexible_fragments(
             hinges = []
             for seq_idx, resid in entries:
                 resid = str(resid).strip()
-                tok = f"{resid}{ch}"
-                if tok in hinge_set:
+                tok = _fmt_resid_with_chain(resid, ch)
+                rn = _resnum_int(resid)
+                if (
+                    tok in hinge_set
+                    or str(resid).strip() in hinge_set
+                    or (rn is not None and str(rn) in hinge_set)
+                ):
                     continue
+
                 hinges.append({
                     "seq": int(seq_idx),
                     "resid": resid,
@@ -461,10 +463,10 @@ def compute_short_flexible_fragments(
 
             # render fragments with chain at ends
             for a, b in merged:
-                mode_fragments.append(f"{a}{ch}-{b}{ch}")
+                mode_fragments.append(f"{_fmt_resid_with_chain(a, ch)}-{_fmt_resid_with_chain(b, ch)}")
             for a, b in removed_ranges_str:
                 # NOTE: a already may include insertion; still append chain at ends
-                mode_fragments.append(f"{a}{ch}-{b}{ch}")
+                mode_fragments.append(f"{_fmt_resid_with_chain(a, ch)}-{_fmt_resid_with_chain(b, ch)}")
 
         # stabilize / dedup (keep order-ish)
         seen = set()
@@ -649,119 +651,22 @@ def parse_hinge_file(hinge_path: Path) -> Dict[int, Dict[str, List[Tuple[int, st
             except Exception:
                 continue
 
-            resid_token_raw = parts[-2].strip()
+            resid_token_raw = parts[-2].strip().rstrip(",;")
             chain = parts[-1].strip()[:1]
             if not resid_token_raw or not chain:
                 continue
 
-            # (1) resid sonundaki harf(ler)i at (chain zaten ayrı)
-            resid_token = _strip_trailing_letters(resid_token_raw)
+            # resid'i aynen tut (insertion code vs bozulmasın)
+            resid_token = resid_token_raw
 
             modes.setdefault(mode, {}).setdefault(chain, []).append((seq_idx, resid_token))
+
 
     for m in modes:
         for ch in modes[m]:
             modes[m][ch].sort(key=lambda x: x[0])
 
     return modes
-
-
-def rigidparts_report_html(
-    pdb_label: str,
-    residues_by_chain: Dict[str, List[str]],
-    modes: Dict[int, Dict[str, List[Tuple[int, str]]]],
-    chains_str: str,
-    min_len: int,
-    last_resid_by_chain: Optional[Dict[str, str]] = None,  # NEW (Kural-4)
-) -> str:
-    """HingeProt web’e benzer HTML tablo çıktısı."""
-    want = set(list(chains_str)) if chains_str else None
-
-    def _css_cell() -> str:
-        return "padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;"
-
-    blocks: List[str] = []
-    for mode in sorted(modes.keys()):
-        blocks.append(
-            f"<div style='margin:10px 0 6px 0;color:#dc2626;font-weight:900;'>"
-            f"----&gt; slowest mode {mode}: {pdb_label}"
-            f"</div>"
-        )
-
-        chains = sorted(modes.get(mode, {}).keys())
-        if want is not None:
-            chains = [c for c in chains if c in want]
-
-        for ch in chains:
-            residue_list = residues_by_chain.get(ch, [])
-            hinge_entries = modes.get(mode, {}).get(ch, [])
-            if not residue_list:
-                blocks.append(f"<div style='margin:6px 0;'>Chain {ch}: not found in .new</div>")
-                continue
-            if not hinge_entries:
-                blocks.append(f"<div style='margin:6px 0;'>Chain {ch}: no hinge entries</div>")
-                continue
-
-            parts_idx, short_frags = build_parts_with_restart_pair_removal(
-                residue_list=residue_list,
-                hinge_entries=hinge_entries,
-                min_len=min_len,
-            )
-
-            # Kural-4: son residue etiketi override (mümkünse .new'dan)
-            override_last = None
-            if last_resid_by_chain:
-                override_last = last_resid_by_chain.get(ch) or last_resid_by_chain.get("*")
-
-            def _label_at(i: int) -> str:
-                if i == len(residue_list) - 1 and override_last:
-                    lab = str(override_last)
-                else:
-                    lab = residue_list[i]
-                # Sonunda harf varsa sil
-                return _strip_trailing_letters(str(lab))
-
-
-            # Hinge residues: her rigid part'ın (son parça hariç) bitişi hinge olur
-            hinge_res = [_label_at(b) for (a, b) in parts_idx[:-1]] if len(parts_idx) > 1 else []
-
-            rows = []
-            for i, (a, b) in enumerate(parts_idx, start=1):
-                rows.append(
-                    f"<tr>"
-                    f"<td style='{_css_cell()}'>{i}</td>"
-                    f"<td style='{_css_cell()}'>{_label_at(a)}-{_label_at(b)}</td>"
-                    f"</tr>"
-                )
-
-            short_html = ""
-            if short_frags:
-                items = []
-                for k, (a, b) in enumerate(short_frags, start=1):
-                    items.append(f"<div style='margin:2px 0;'>{k}. {_label_at(a)}-{_label_at(b)}</div>")
-                short_html = (
-                    "<div style='margin-top:10px;color:#dc2626;font-weight:900;'>Short Flexible Fragments:</div>"
-                    + "".join(items)
-                )
-
-            blocks.append(
-                f"<div style='margin:8px 0 14px 0;'>"
-                f"<div style='font-weight:900;margin-bottom:4px;'>Chain {ch}</div>"
-                f"<table style='width:100%;border-collapse:collapse;'>"
-                f"<thead><tr>"
-                f"<th style='text-align:left;{_css_cell()}border-bottom:2px solid #e5e7eb;'>Rigid Part No</th>"
-                f"<th style='text-align:left;{_css_cell()}border-bottom:2px solid #e5e7eb;'>Residues</th>"
-                f"</tr></thead>"
-                f"<tbody>{''.join(rows)}</tbody>"
-                f"</table>"
-                f"<div style='margin-top:6px;color:#1d4ed8;font-weight:900;'>"
-                f"Hinge residues: {' '.join(hinge_res) if hinge_res else '-'}"
-                f"</div>"
-                f"{short_html}"
-                f"</div>"
-            )
-
-    return "<div style='font-family:Arial, Helvetica, sans-serif;'>" + "".join(blocks) + "</div>"
 
 
 # ----------------------------- UI -----------------------------
@@ -1589,7 +1494,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 shutil.rmtree(out_dir_repo, ignore_errors=True)
 
             cmd = f"perl ./runHingeProt.pl {pdb_filename} {chains_str}"
-            r = _sh(cmd, cwd=hp_dir)
+            r = _sh(cmd, cwd=hp_dir, timeout=1200)  # 20 dk
             if r.returncode != 0:
                 raise RuntimeError(f"runHingeProt.pl failed (return code {r.returncode}).\n{r.stderr}")
 
