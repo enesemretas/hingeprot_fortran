@@ -1090,6 +1090,32 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     
         return multi, len(models)
 
+    def _is_ca_only_pdb(pdb_text: str, min_atoms: int = 30, ca_frac_thr: float = 0.90) -> bool:
+        total = 0
+        ca = 0
+        other = 0
+    
+        for ln in (pdb_text or "").splitlines():
+            if not ln.startswith(("ATOM  ", "HETATM")):
+                continue
+            if len(ln) < 16:
+                continue
+            total += 1
+            an = ln[12:16].strip().upper()  # atom name
+            if an == "CA":
+                ca += 1
+            else:
+                other += 1
+    
+        if total < min_atoms:
+            return False
+    
+        return (ca / total) >= ca_frac_thr and other <= max(3, int(0.02 * total))
+    
+    
+
+
+    
         # ---------- NEW: STEP_*_ANMLD.pdb -> trajectory helpers ----------
     _STEP_RE = re.compile(r"STEP[_-]?(\d+)", re.IGNORECASE)
 
@@ -1174,17 +1200,23 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             view.setBackgroundColor("white")
             view.addModelsAsFrames(multi_pdb, "pdb")
 
-            style = {
-                "cartoon": {
-                    "colorscheme": {
-                        "prop": "b",
-                        "gradient": "roygb",
-                        "min": float(bmin),
-                        "max": float(bmax),
-                    }
-                }
-            }
-            view.setStyle({}, style)
+            ca_only = _is_ca_only_pdb(multi_pdb)
+            
+            if ca_only:
+                view.setStyle({}, {"line": {"color": "lightgray"}})
+                view.setStyle(
+                    {"atom": "CA"},
+                    {"sphere": {"scale": 0.35,
+                                "colorscheme": {"prop": "b", "gradient": "roygb",
+                                                "min": float(bmin), "max": float(bmax)}}}
+                )
+            else:
+                view.setStyle(
+                    {},
+                    {"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb",
+                                                 "min": float(bmin), "max": float(bmax)}}}
+                )
+
             view.zoomTo()
 
             if nmodels >= 2:
@@ -1231,8 +1263,18 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
                 v = py3Dmol.view(width=MODE_W, height=MODE_H)
                 v.setBackgroundColor("white")
+
                 v.addModelsAsFrames(multi_pdb, "pdb")
-                v.setStyle({"cartoon": {"color": "spectrum"}})
+                
+                ca_only = _is_ca_only_pdb(multi_pdb)
+                if ca_only:
+                    v.setStyle({}, {"line": {"color": "lightgray"}})
+                    v.setStyle({"atom": "CA"}, {"sphere": {"scale": 0.30}})
+                else:
+                    v.setStyle({}, {"cartoon": {"color": "spectrum"}})
+
+
+                
                 v.zoomTo()
                 v.animate({"loop": "backAndForth", "reps": 0, "interval": 180})
 
@@ -1721,13 +1763,24 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         v.addModel(pdb_text, "pdb")
         v.setBackgroundColor("white")
 
-        # default: everything grey
-        v.setStyle({}, {"cartoon": {"color": "lightgray"}})
+        ca_only = _is_ca_only_pdb(pdb_text)
+        
+        if ca_only:
+            # CA-only: line + CA spheres
+            v.setStyle({}, {"line": {"color": "lightgray"}})
+            v.setStyle({"atom": "CA"}, {"sphere": {"color": "lightgray", "scale": 0.25}})
+        
+            for ch in selected:
+                col = chain_colors.get(ch, "red")
+                v.setStyle({"chain": ch}, {"line": {"color": col}})
+                v.setStyle({"chain": ch, "atom": "CA"}, {"sphere": {"color": col, "scale": 0.30}})
+        else:
+            # Full-atom/backbone present: cartoon
+            v.setStyle({}, {"cartoon": {"color": "lightgray"}})
+            for ch in selected:
+                col = chain_colors.get(ch, "red")
+                v.setStyle({"chain": ch}, {"cartoon": {"color": col}})
 
-        # selected: each chain different color
-        for ch in selected:
-            col = chain_colors.get(ch, "red")
-            v.setStyle({"chain": ch}, {"cartoon": {"color": col}})
 
         # ligands / hetero atoms (exclude waters)
         # show as sticks+spheres
