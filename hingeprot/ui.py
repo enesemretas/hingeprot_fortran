@@ -909,6 +909,41 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         return raw_html.replace(old, new)
 
     def _wrap_html_doc(snippet: str) -> str:
+        """py3Dmol HTML snippet'ini tam bir HTML dokümanına sarar."""
+        return (
+            "<!doctype html><html><head><meta charset='utf-8'></head>"
+            "<body style='margin:0;overflow:hidden;'>"
+            f"{snippet}"
+            "</body></html>"
+        )
+
+    def _iframe_from_html_doc(doc_html: str, w: int, h: int) -> str:
+        """
+        /files veya data: kullanmadan iframe içinde HTML'i çalıştırır.
+        (srcdoc + base64 => localhost problemlerini bitirir)
+        """
+        b64 = base64.b64encode(doc_html.encode("utf-8")).decode("ascii")
+
+        # srcdoc attribute'u dışarıda tek tırnakla kullanıldığı için içeride tek tırnak kullanmıyoruz.
+        srcdoc = (
+            "<!doctype html><html><head><meta charset=\"utf-8\"></head>"
+            "<body style=\"margin:0;overflow:hidden;\">"
+            "<script>"
+            f"const html=atob(\"{b64}\");"
+            "document.open();document.write(html);document.close();"
+            "</script>"
+            "</body></html>"
+        )
+
+        return (
+            f"<iframe srcdoc='{srcdoc}' "
+            f"sandbox='allow-scripts allow-same-origin' "
+            f"style='width:{w}px;height:{h}px;border:1px solid #e5e7eb;"
+            f"border-radius:12px;overflow:hidden;'></iframe>"
+        )
+
+    
+    def _wrap_html_doc(snippet: str) -> str:
         return (
             "<!doctype html><html><head><meta charset='utf-8'></head>"
             "<body style='margin:0;overflow:hidden;'>"
@@ -1100,32 +1135,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 view.animate({"loop": "backAndForth", "reps": 0, "interval": 180})
 
             raw = _html_with_unique_divid(view._make_html())
-
-            # ---- iframe source: Colab uses /files, Local uses data URI ----
-            if IS_COLAB:
-                out_dir = os.path.dirname(os.path.abspath(mode_pdb_path))
-                html_path = os.path.join(out_dir, f"__hp_view_{Path(mode_pdb_path).stem}_{uuid.uuid4().hex}.html")
-                Path(html_path).write_text(raw, encoding="utf-8")
-                iframe_src = f"/files{html_path}"
-                sandbox_attr = "sandbox='allow-scripts allow-same-origin'"
-            else:
-                raw = _html_with_unique_divid(view._make_html())
-                doc = _wrap_html_doc(raw)
-                save_dir = os.path.dirname(os.path.abspath(mode_pdb_path))
-                iframe = _write_html_and_get_iframe(doc, save_dir=save_dir, w=MODE_W, h=MODE_H)
-                
-                holder.value = iframe
-
-                sandbox_attr = ""  # localhost: sandbox'sız daha sorunsuz
-
-            holder.value = (
-                f"<iframe "
-                f"src='{iframe_src}' "
-                f"{sandbox_attr} "
-                f"style='width:{MODE_W}px;height:{MODE_H}px;"
-                f"border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;'"
-                f"></iframe>"
-            )
+            doc = _wrap_html_doc(raw)
+            holder.value = _iframe_from_html_doc(doc, MODE_W, MODE_H)
 
         except Exception as e:
             holder.value = (
@@ -1611,14 +1622,12 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
         raw = _html_with_unique_divid(v._make_html())
         doc = _wrap_html_doc(raw)
-        
-        # html'i run_dir altına yazmak en iyisi (load ile zaten run_dir oluşuyor)
-        save_dir = state.get("run_dir") or os.getcwd()
-        iframe = _write_html_and_get_iframe(doc, save_dir=save_dir, w=VIEW_W, h=VIEW_H)
-        
+        iframe_html = _iframe_from_html_doc(doc, VIEW_W, VIEW_H)
+
         with viewer_out:
             clear_output(wait=True)
-            display(HTML(iframe))
+            display(W.HTML(iframe_html))
+
 
 
     # ---------- input visibility ----------
