@@ -600,7 +600,10 @@ def rigidparts_report_widget_from_report(
 
         if btn is not None:
             blocks.append(
-                W.HBox([btn], layout=W.Layout(justify_content="flex-end"))
+                W.HBox(
+                    [btn],
+                    layout=W.Layout(width="100%", justify_content="center", align_items="center")
+                )
             )
 
 
