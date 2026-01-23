@@ -570,6 +570,24 @@ def rigidparts_report_widget_from_report(
     ref_pdb_path: str | None = None,  # <-- NEW (isteğe bağlı)
 ) -> W.VBox:
 
+    import glob
+    
+    def _locate_mode_pdb(out_dir: str, pdb_label: str, mode: int) -> str | None:
+        cands = [
+            os.path.join(out_dir, f"{pdb_label}.mode{mode}.pdb"),
+            os.path.join(out_dir, f"{os.path.splitext(pdb_label)[0]}.mode{mode}.pdb"),
+        ]
+        for p in cands:
+            if os.path.exists(p) and os.path.getsize(p) > 0:
+                return p
+        # fallback: dizinde ne varsa yakala
+        hits = sorted(glob.glob(os.path.join(out_dir, f"*mode{mode}.pdb")), key=os.path.getsize, reverse=True)
+        for p in hits:
+            if os.path.getsize(p) > 0:
+                return p
+        return None
+
+    
     def _css_cell() -> str:
         return "padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;"
 
@@ -578,9 +596,10 @@ def rigidparts_report_widget_from_report(
     for mode in sorted(report.keys()):
         # --- NEW: Mode 1/2 mini-viewer (başlığın üstüne, ortalı) ---
         if mode_viewer_fn is not None and mode in (1, 2):
-            mfile = os.path.join(out_dir, f"{pdb_label}.mode{mode}.pdb")
-            if os.path.exists(mfile) and os.path.getsize(mfile) > 0:
+            mfile = _locate_mode_pdb(out_dir, pdb_label, mode)
+            if mfile:
                 blocks.append(mode_viewer_fn(mfile))
+
 
  
         # --- header text ---
@@ -1010,14 +1029,53 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         return multi, len(models)
     
 
+    def _build_multimodel_pdb_string(pdb_text: str) -> tuple[str, int]:
+        """
+        MODEL/ENDMDL yoksa bile multi-model formatını garanti eder.
+        """
+        lines = (pdb_text or "").splitlines()
+        has_model = any(ln.startswith("MODEL") for ln in lines)
+    
+        models: list[list[str]] = []
+    
+        if has_model:
+            cur: list[str] = []
+            for ln in lines:
+                if ln.startswith("MODEL"):
+                    if cur:
+                        models.append(cur)
+                        cur = []
+                    continue
+                if ln.startswith("ENDMDL"):
+                    models.append(cur)
+                    cur = []
+                    continue
+                if ln.startswith("END"):
+                    continue
+                cur.append(ln)
+            if cur:
+                models.append(cur)
+        else:
+            models = [[ln for ln in lines if not ln.startswith("END")]]
+    
+        # boş model temizle
+        cleaned = []
+        for m in models:
+            if any(ln.startswith(("ATOM", "HETATM")) for ln in m):
+                cleaned.append(m)
+        if cleaned:
+            models = cleaned
+    
+        multi = ""
+        for i, m in enumerate(models, start=1):
+            multi += f"MODEL        {i}\n"
+            multi += ("\n".join(m).rstrip() + "\n")
+            multi += "ENDMDL\n"
+    
+        return multi, len(models)
+    
+    
     def _make_mode_viewer(mode_pdb_path: str) -> W.Widget:
-        """
-        Colab'da en stabil gösterim:
-        - PDB -> multi-model string (MODEL/ENDMDL garantili)
-        - py3Dmol.addModelsAsFrames(...)
-        - HTML'i dosyaya yaz
-        - iframe src="/files/..." ile yükle
-        """
         py3Dmol = _ensure_py3dmol()
     
         MODE_W = 560
@@ -1031,31 +1089,21 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         try:
             pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
             if not pdb_text.strip():
-                raise RuntimeError("Empty PDB text.")
+                raise RuntimeError(f"Empty PDB: {mode_pdb_path}")
     
             multi_pdb, nmodels = _build_multimodel_pdb_string(pdb_text)
-    
-            # bfactor aralığı (multi string üzerinden de olur)
             bmin, bmax = _bfactor_minmax(multi_pdb)
     
             view = py3Dmol.view(width=MODE_W, height=MODE_H)
             view.setBackgroundColor("white")
     
-            # Kritik satır:
+            # web’de bulduğunuz mantık:
             view.addModelsAsFrames(multi_pdb, "pdb")
     
-            # B-factor ile renklendir
-            style = {
-                "cartoon": {
-                    "colorscheme": {
-                        "prop": "b",
-                        "gradient": "roygb",
-                        "min": float(bmin),
-                        "max": float(bmax),
-                    }
-                }
-            }
-            view.setStyle({}, style)
+            view.setStyle(
+                {},
+                {"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb", "min": float(bmin), "max": float(bmax)}}},
+            )
             view.zoomTo()
     
             if nmodels >= 2:
@@ -1064,23 +1112,16 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             raw = view._make_html()
             raw = _html_with_unique_divid(raw)
     
-            # HTML'i dosyaya yaz ve iframe ile yükle
+            # HTML’i dosyaya yaz, /files ile iframe’den yükle (en stabil)
             out_dir = os.path.dirname(os.path.abspath(mode_pdb_path))
-            html_path = os.path.join(
-                out_dir,
-                f"__hp_view_{Path(mode_pdb_path).stem}_{uuid.uuid4().hex}.html"
-            )
+            html_path = os.path.join(out_dir, f"__hp_view_{Path(mode_pdb_path).stem}_{uuid.uuid4().hex}.html")
             Path(html_path).write_text(raw, encoding="utf-8")
-    
-            # Colab /files yalnızca /content altını servis eder. (senin run'lar zaten /content'te)
-            iframe_src = f"/files{html_path}"
     
             holder.value = (
                 f"<iframe "
-                f"src='{iframe_src}' "
+                f"src='/files{html_path}' "
                 f"sandbox='allow-scripts allow-same-origin' "
-                f"style='width:{MODE_W}px;height:{MODE_H}px;"
-                f"border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;'"
+                f"style='width:{MODE_W}px;height:{MODE_H}px;border:1px solid #e5e7eb;border-radius:12px;'"
                 f"></iframe>"
             )
     
