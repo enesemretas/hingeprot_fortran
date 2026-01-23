@@ -783,8 +783,14 @@ def parse_hinge_file(hinge_path: Path) -> Dict[int, Dict[str, List[Tuple[int, st
 
 # ----------------------------- UI -----------------------------
 def launch(runs_root: str = "/content/hingeprot_runs"):
-    from google.colab import output  # colab-only
-    output.enable_custom_widget_manager()
+    # ---- ENV DETECTION: Colab vs Localhost ----
+    IS_COLAB = False
+    try:
+        from google.colab import output as colab_output  # type: ignore
+        colab_output.enable_custom_widget_manager()
+        IS_COLAB = True
+    except Exception:
+        colab_output = None  # local Jupyter
 
     os.makedirs(runs_root, exist_ok=True)
 
@@ -1003,41 +1009,33 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         return multi, len(models)
     
 
-    def _make_mode_viewer(mode_pdb_path: str) -> W.Widget:
+    def _make_mode_viewer(mode_pdb_path: str):
         """
-        Colab'da en stabil gösterim:
-        - PDB -> multi-model string (MODEL/ENDMDL garantili)
-        - py3Dmol.addModelsAsFrames(...)
-        - HTML'i dosyaya yaz
-        - iframe src="/files/..." ile yükle
+        Colab'da: /files + iframe (mevcut stabil yöntem)
+        Localhost'ta: data:text/html;base64 + iframe (artık /files/content/... sorunu yok)
         """
         py3Dmol = _ensure_py3dmol()
-    
+
         MODE_W = 560
         MODE_H = 280
-    
+
         holder = W.HTML(
             value="<div style='font-family:Arial;color:#6b7280;'>Rendering 3D view…</div>",
             layout=W.Layout(width=f"{MODE_W}px", height=f"{MODE_H}px"),
         )
-    
+
         try:
             pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
             if not pdb_text.strip():
                 raise RuntimeError("Empty PDB text.")
-    
+
             multi_pdb, nmodels = _build_multimodel_pdb_string(pdb_text)
-    
-            # bfactor aralığı (multi string üzerinden de olur)
             bmin, bmax = _bfactor_minmax(multi_pdb)
-    
+
             view = py3Dmol.view(width=MODE_W, height=MODE_H)
             view.setBackgroundColor("white")
-    
-            # Kritik satır:
             view.addModelsAsFrames(multi_pdb, "pdb")
-    
-            # B-factor ile renklendir
+
             style = {
                 "cartoon": {
                     "colorscheme": {
@@ -1050,40 +1048,40 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             }
             view.setStyle({}, style)
             view.zoomTo()
-    
+
             if nmodels >= 2:
                 view.animate({"loop": "backAndForth", "reps": 0, "interval": 180})
-    
-            raw = view._make_html()
-            raw = _html_with_unique_divid(raw)
-    
-            # HTML'i dosyaya yaz ve iframe ile yükle
-            out_dir = os.path.dirname(os.path.abspath(mode_pdb_path))
-            html_path = os.path.join(
-                out_dir,
-                f"__hp_view_{Path(mode_pdb_path).stem}_{uuid.uuid4().hex}.html"
-            )
-            Path(html_path).write_text(raw, encoding="utf-8")
-    
-            # Colab /files yalnızca /content altını servis eder. (senin run'lar zaten /content'te)
-            iframe_src = f"/files{html_path}"
-    
+
+            raw = _html_with_unique_divid(view._make_html())
+
+            # ---- iframe source: Colab uses /files, Local uses data URI ----
+            if IS_COLAB:
+                out_dir = os.path.dirname(os.path.abspath(mode_pdb_path))
+                html_path = os.path.join(out_dir, f"__hp_view_{Path(mode_pdb_path).stem}_{uuid.uuid4().hex}.html")
+                Path(html_path).write_text(raw, encoding="utf-8")
+                iframe_src = f"/files{html_path}"
+                sandbox_attr = "sandbox='allow-scripts allow-same-origin'"
+            else:
+                b64 = base64.b64encode(raw.encode("utf-8")).decode("ascii")
+                iframe_src = f"data:text/html;base64,{b64}"
+                sandbox_attr = ""  # localhost: sandbox'sız daha sorunsuz
+
             holder.value = (
                 f"<iframe "
                 f"src='{iframe_src}' "
-                f"sandbox='allow-scripts allow-same-origin' "
+                f"{sandbox_attr} "
                 f"style='width:{MODE_W}px;height:{MODE_H}px;"
                 f"border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;'"
                 f"></iframe>"
             )
-    
+
         except Exception as e:
             holder.value = (
                 "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
                 f"Viewer error: {_safe_html(str(e))}"
                 "</div>"
             )
-    
+
         return W.HBox([holder], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
 
     
@@ -1351,12 +1349,19 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     )
 
     btn_choose_file = W.Button(description="Choose file", icon="upload", layout=W.Layout(width="180px"))
+    file_upload = W.FileUpload(accept=".pdb,.ent", multiple=False, layout=W.Layout(width="260px"))  # LOCAL
     upload_prog = W.IntProgress(value=0, min=0, max=100, description="", layout=W.Layout(width="160px"))
     upload_prog.bar_style = ""
     file_lbl = W.Label("No file chosen")
 
     code_box = W.HBox([pdb_code], layout=W.Layout(align_items="center"))
-    upload_box = W.HBox([btn_choose_file, upload_prog, file_lbl], layout=W.Layout(align_items="center", gap="10px"))
+    
+    # Upload box: Colab -> button, Local -> FileUpload widget
+    if IS_COLAB:
+        upload_box = W.HBox([btn_choose_file, upload_prog, file_lbl], layout=W.Layout(align_items="center", gap="10px"))
+    else:
+        upload_box = W.HBox([file_upload, upload_prog, file_lbl], layout=W.Layout(align_items="center", gap="10px"))
+
 
     btn_load = W.Button(description="Load / Detect Chains", button_style="info", icon="search", layout=W.Layout(width="260px"))
 
@@ -1601,67 +1606,108 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         except Exception as e:
             _set_status(f"Upload callback error: {e}")
 
-    output.register_callback(cb_prog, _js_upload_progress_callback)
-    output.register_callback(cb_name, _js_upload_callback)
 
-    def on_choose_file(_):
-        upload_prog.value = 0
-        upload_prog.bar_style = "info"
 
-        js = f"""
-        (async () => {{
-          const input = document.createElement('input');
-          input.type = 'file';
-          input.accept = '.pdb,.ent';
-          input.style.display = 'none';
-          document.body.appendChild(input);
+    # ---- COLAB upload wiring ----
+    if IS_COLAB and colab_output is not None:
+        colab_output.register_callback(cb_prog, _js_upload_progress_callback)
+        colab_output.register_callback(cb_name, _js_upload_callback)
 
-          input.onchange = async () => {{
-            const file = input.files && input.files[0];
-            document.body.removeChild(input);
-            if (!file) return;
+        def on_choose_file(_):
+            upload_prog.value = 0
+            upload_prog.bar_style = "info"
 
-            const reader = new FileReader();
+            js = f"""
+            (async () => {{
+              const input = document.createElement('input');
+              input.type = 'file';
+              input.accept = '.pdb,.ent';
+              input.style.display = 'none';
+              document.body.appendChild(input);
 
-            reader.onloadstart = async () => {{
-              try {{
-                await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: 0}}], {{}});
-              }} catch (err) {{}}
-            }};
+              input.onchange = async () => {{
+                const file = input.files && input.files[0];
+                document.body.removeChild(input);
+                if (!file) return;
 
-            reader.onprogress = async (e) => {{
-              try {{
-                if (e.lengthComputable) {{
-                  const pct = Math.round((e.loaded / e.total) * 100);
-                  await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: pct}}], {{}});
-                }}
-              }} catch (err) {{}}
-            }};
+                const reader = new FileReader();
 
-            reader.onloadend = async () => {{
-              try {{
-                await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: 100}}], {{}});
-              }} catch (err) {{}}
-            }};
+                reader.onloadstart = async () => {{
+                  try {{
+                    await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: 0}}], {{}});
+                  }} catch (err) {{}}
+                }};
 
-            reader.onload = async () => {{
-              const b64 = (reader.result || "").split(",")[1] || "";
-              await google.colab.kernel.invokeFunction(
-                "{cb_name}",
-                [{{name: file.name, data_b64: b64}}],
-                {{}}
-              );
-            }};
+                reader.onprogress = async (e) => {{
+                  try {{
+                    if (e.lengthComputable) {{
+                      const pct = Math.round((e.loaded / e.total) * 100);
+                      await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: pct}}], {{}});
+                    }}
+                  }} catch (err) {{}}
+                }};
 
-            reader.readAsDataURL(file);
-          }};
+                reader.onloadend = async () => {{
+                  try {{
+                    await google.colab.kernel.invokeFunction("{cb_prog}", [{{pct: 100}}], {{}});
+                  }} catch (err) {{}}
+                }};
 
-          input.click();
-        }})();
-        """
-        output.eval_js(js)
+                reader.onload = async () => {{
+                  const b64 = (reader.result || "").split(",")[1] || "";
+                  await google.colab.kernel.invokeFunction(
+                    "{cb_name}",
+                    [{{name: file.name, data_b64: b64}}],
+                    {{}}
+                  );
+                }};
 
-    btn_choose_file.on_click(on_choose_file)
+                reader.readAsDataURL(file);
+              }};
+
+              input.click();
+            }})();
+            """
+            colab_output.eval_js(js)
+
+        btn_choose_file.on_click(on_choose_file)
+
+    # ---- LOCAL upload wiring (localhost) ----
+    if not IS_COLAB:
+        def _on_local_upload(change):
+            try:
+                val = file_upload.value
+                if not val:
+                    return
+
+                # ipywidgets v8: dict{filename: {content: bytes, metadata:{name,...}}}
+                if isinstance(val, dict):
+                    # filename key en sağlam
+                    fname_key = next(iter(val.keys()))
+                    item = val[fname_key] or {}
+                    data = item.get("content") or item.get("data") or b""
+                    meta = item.get("metadata") or {}
+                    name = meta.get("name") or item.get("name") or fname_key or "upload.pdb"
+                else:
+                    # bazı ortamlarda list/tuple gelebilir
+                    item = val[0] if isinstance(val, (list, tuple)) and val else {}
+                    data = item.get("content") or item.get("data") or b""
+                    name = (item.get("metadata") or {}).get("name") or item.get("name") or "upload.pdb"
+
+                if not data:
+                    _set_status("Local upload received empty file.")
+                    return
+
+                state["upload_name"] = name
+                state["upload_bytes"] = bytes(data)
+                file_lbl.value = name
+                upload_prog.value = 100
+                upload_prog.bar_style = "success"
+                _set_status(f"Uploaded file: {name} ({len(state['upload_bytes'])} bytes)\nNow click 'Load / Detect Chains'.")
+            except Exception as e:
+                _set_status(f"Local upload error: {e}")
+
+        file_upload.observe(_on_local_upload, names="value")
 
     # ---------- chain checkbox rebuild ----------
     def _on_chain_cb_change(_):
