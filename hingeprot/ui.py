@@ -1090,82 +1090,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     
         return multi, len(models)
 
-    # ---------- NEW: split a multi-model PDB into STEP_*_ANMLD.pdb files ----------
-    def _extract_model_blocks(pdb_text: str) -> list[str]:
-        """
-        pdb_text içinden MODEL...ENDMDL bloklarını çıkarır.
-        MODEL yoksa tek model kabul eder.
-        Dönen her eleman: sadece atom/ter/conect vs + en sonda 'END\n' içerir.
-        """
-        lines = (pdb_text or "").splitlines()
-        has_model = any(ln.startswith("MODEL") for ln in lines)
-
-        models: list[list[str]] = []
-
-        if has_model:
-            cur: list[str] = []
-            in_model = False
-            for ln in lines:
-                if ln.startswith("MODEL"):
-                    in_model = True
-                    cur = []
-                    continue
-                if ln.startswith("ENDMDL"):
-                    if any(x.startswith(("ATOM", "HETATM")) for x in cur):
-                        models.append(cur)
-                    cur = []
-                    in_model = False
-                    continue
-                if ln.startswith("END"):
-                    continue
-                if not in_model:
-                    continue
-                cur.append(ln)
-
-            if cur and any(x.startswith(("ATOM", "HETATM")) for x in cur):
-                models.append(cur)
-
-        else:
-            # Tek model
-            m = [ln for ln in lines if not ln.startswith(("MODEL", "ENDMDL", "END"))]
-            if any(ln.startswith(("ATOM", "HETATM")) for ln in m):
-                models = [m]
-
-        out: list[str] = []
-        for m in models:
-            txt = "\n".join(m).rstrip() + "\nEND\n"
-            out.append(txt)
-        return out
-
-    def _write_steps_from_mode_pdb(mode_pdb_path: str, step_dir: Path, max_frames: int = 200) -> int:
-        """
-        mode*.pdb içindeki frameleri STEP_0001_ANMLD.pdb ... diye yazar.
-        Çok frame varsa stride ile seyrekleştirir (max_frames).
-        Return: yazılan step sayısı
-        """
-        step_dir.mkdir(parents=True, exist_ok=True)
-
-        pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
-        frames = _extract_model_blocks(pdb_text)
-
-        if not frames:
-            return 0
-
-        # Çok fazlaysa seyrekleştir
-        if len(frames) > max_frames:
-            stride = max(1, len(frames) // max_frames)
-            frames = frames[::stride]
-
-        # Yaz
-        for i, fr in enumerate(frames, start=1):
-            fn = step_dir / f"STEP_{i:04d}_ANMLD.pdb"
-            fn.write_text(fr, encoding="utf-8")
-
-        return len(frames)
-
-    
-
-    
         # ---------- NEW: STEP_*_ANMLD.pdb -> trajectory helpers ----------
     _STEP_RE = re.compile(r"STEP[_-]?(\d+)", re.IGNORECASE)
 
@@ -2191,18 +2115,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 if os.path.exists(p) and os.path.getsize(p) > 0:
                     mode_files[m] = p
 
-            # --- NEW: Eğer STEP_* yoksa mode dosyalarından üret ---
-            # Hedef klasörler: dest_out_dir/mode1  ve  dest_out_dir/mode2
-            for m, p in mode_files.items():
-                step_dir = Path(dest_out_dir) / f"mode{m}"
-                # zaten step varsa dokunma
-                if not any(step_dir.glob("STEP_*_ANMLD.pdb")):
-                    n = _write_steps_from_mode_pdb(p, step_dir, max_frames=200)
-                    # istersen status'a yaz:
-                    # _set_status(f"Mode{m}: wrote {n} STEP frames into {step_dir}")
-
             _set_mode_viewer_files(mode_files)
-
 
 
 
