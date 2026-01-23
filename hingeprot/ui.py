@@ -1335,11 +1335,22 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             if not pdb_chain_path.exists():
                 raise RuntimeError(f"Chain PDB file not found (expected 'pdb' or '{pdb_filename}') in: {dest_out_dir}")
 
+            # >>> FIX: hinge_path TANIMLA (ve varlığını kontrol et)
+            hinge_path = Path(dest_out_dir) / f"{pdb_filename}.hinge"
+            if (not hinge_path.exists()) or (hinge_path.stat().st_size == 0):
+                # istersen sağlamlaştır: diğer olası isimleri de dene
+                alt = _find_hinges_file(dest_out_dir, pdb_filename)
+                if alt:
+                    hinge_path = Path(alt)
+                else:
+                    raise RuntimeError(f".hinge file not found: {hinge_path}")
+        
             residues_by_chain = read_residue_order_from_pdb(pdb_chain_path)
-            modes = parse_hinge_file(Path(hinge_path))
+            
+            modes = parse_hinge_file(hinge_path)   # <<< burada artık OK
 
             if not residues_by_chain:
-                raise RuntimeError("No residues parsed from .new file (PDB-like ATOM/HETATM expected).")
+                raise RuntimeError("No residues parsed from PDB file (ATOM/HETATM expected).")
             if not modes:
                 raise RuntimeError("No hinge modes parsed from .hinge file.")
 
