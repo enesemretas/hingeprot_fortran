@@ -243,6 +243,69 @@ def _leading_int_str(resid: str) -> Optional[str]:
     m = re.match(r"^(-?\d+)", t)
     return m.group(1) if m else None
 
+def _has_insertion_suffix(resid: str) -> bool:
+    """'100A', '45BC' gibi sonu harfli residue id mi?"""
+    t = (resid or "").strip()
+    return bool(re.match(r"^-?\d+[A-Za-z]+$", t))
+
+
+def _resnum_int(resid: str) -> Optional[int]:
+    """Resid'den leading integer'ı int olarak alır. Yoksa None."""
+    s = _leading_int_str(resid)
+    if s is None:
+        return None
+    try:
+        return int(s)
+    except Exception:
+        return None
+
+
+def _adjust_parts_for_insertions(parts: List[Tuple[int, int]], residue_list: List[str]) -> List[Tuple[int, int]]:
+    """
+    Eğer bir part b ile bitiyorsa ve (b+1) aynı sayı + harf ise (örn. 100 -> 100A),
+    o insertion residue(leri) bir önceki part'a katılır; sonraki part başlangıcı atlatılır.
+    """
+    if not parts or len(parts) < 2:
+        return parts
+
+    parts = list(parts)
+    i = 0
+    while i < len(parts) - 1:
+        a1, b1 = parts[i]
+        a2, b2 = parts[i + 1]
+
+        end = b1
+        start = a2
+
+        while start <= b2 and start == end + 1:
+            r_end = residue_list[end]
+            r_next = residue_list[start]
+            n_end = _leading_int_str(r_end)
+            n_next = _leading_int_str(r_next)
+
+            if n_end and n_next and (n_end == n_next) and _has_insertion_suffix(r_next):
+                # 100A, 100B ... hepsini önceki part'a kat
+                end += 1
+                start += 1
+            else:
+                break
+
+        parts[i] = (a1, end)
+        parts[i + 1] = (start, b2)
+
+        # eğer sonraki part boşaldıysa sil
+        if parts[i + 1][0] > parts[i + 1][1]:
+            del parts[i + 1]
+            continue
+
+        i += 1
+
+    return parts
+
+
+
+
+
 def read_last_residue_id_from_new(new_path: Path) -> Dict[str, str]:
     """
     Kural-4: Son residue etiketi mümkünse .new dosyasının ATOM/HETATM satırlarından alınır.
@@ -366,22 +429,6 @@ def build_parts_with_restart_pair_removal(
     hinge_entries: List[Tuple[int, str]],
     min_len: int,
 ) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
-    """
-    Kural-1
-      - İlk iki hinge arası mesafe kontrol edilir.
-        * Eğer < min_len ise: ilk iki hinge listeden çıkarılır,
-          aradaki bölge (h1+1 .. h2) Short Flexible Fragments’a eklenir.
-        * Eğer >= min_len ise: ilk hinge’in başlangıçtan uzaklığı kontrol edilir.
-          Başlangıçtan < min_len ise: sadece ilk hinge silinir,
-          Short Flexible Fragments’a (ilk residue .. ilk hinge) eklenir.
-    Kural-2
-      - Sonraki adımlarda: aralarında < min_len residue olan hinge çiftleri bulunur,
-        o çift (iki hinge) listeden çıkarılır ve aradaki bölge (h1+1 .. h2)
-        Short Flexible Fragments’a eklenir. Her işlemden sonra restart edilir.
-    Kural-3
-      - Rigid part’lar overlap yapmaz: bir satır b ile bitiyorsa sonraki satır b+1 ile başlar.
-        Yani: [0..h1], [h1+1..h2], ..., [hlast+1..n-1]
-    """
     n = len(residue_list)
     if n == 0:
         return [], []
@@ -389,19 +436,21 @@ def build_parts_with_restart_pair_removal(
     # exact resid -> index
     idx_map_exact = {rid: i for i, rid in enumerate(residue_list)}
 
-    # numeric part -> first index (helps when hinge file drops insertion letters)
+    # numeric part -> first index
     idx_map_num: Dict[str, int] = {}
     for i, rid in enumerate(residue_list):
         num = _leading_int_str(rid)
         if num is not None and num not in idx_map_num:
             idx_map_num[num] = i
 
-    # map hinge entries to positions
+    start_resnum = _resnum_int(residue_list[0])
+
     hinges: List[Dict[str, Any]] = []
     for seq_idx, resid in hinge_entries:
         resid = str(resid)
         resid_clean = _strip_trailing_letters(resid)
 
+        # map to position
         if resid_clean in idx_map_exact:
             pos = idx_map_exact[resid_clean]
         else:
@@ -409,12 +458,16 @@ def build_parts_with_restart_pair_removal(
             if num is not None and num in idx_map_num:
                 pos = idx_map_num[num]
             else:
-                # fallback: seq_idx (1-based) -> pos (0-based)
                 pos = int(seq_idx) - 1
                 if not (0 <= pos < n):
                     continue
 
-        hinges.append({"seq": int(seq_idx), "pos": int(pos), "resid": resid_clean})
+        # resnum for distance calc: prefer actual residue_list[pos]
+        resnum = _resnum_int(residue_list[pos])
+        if resnum is None:
+            resnum = _resnum_int(resid_clean)
+
+        hinges.append({"seq": int(seq_idx), "pos": int(pos), "resid": resid_clean, "resnum": resnum})
 
     # deduplicate by position (keep smallest seq for same pos)
     tmp: Dict[int, Dict[str, Any]] = {}
@@ -423,20 +476,31 @@ def build_parts_with_restart_pair_removal(
         if p not in tmp or int(h["seq"]) < int(tmp[p]["seq"]):
             tmp[p] = h
 
-    # IMPORTANT: sort by position (residue distance = index difference)
     hinges = sorted(tmp.values(), key=lambda x: int(x["pos"]))
 
     removed_frags: List[Tuple[int, int]] = []
 
     def _gap(i: int, j: int) -> int:
-        return int(hinges[j]["pos"]) - int(hinges[i]["pos"])
+        hi, hj = hinges[i], hinges[j]
+        ri, rj = hi.get("resnum"), hj.get("resnum")
+        if isinstance(ri, int) and isinstance(rj, int):
+            return abs(int(rj) - int(ri))   # <<< residue ID farkı
+        return abs(int(hj["pos"]) - int(hi["pos"]))  # fallback
+
+    def _head_len() -> int:
+        if not hinges:
+            return 0
+        first = hinges[0].get("resnum")
+        if isinstance(first, int) and isinstance(start_resnum, int):
+            return abs(int(first) - int(start_resnum)) + 1
+        return int(hinges[0]["pos"]) + 1
 
     # restart loop
     while True:
         if not hinges:
             break
 
-        # ---------- Kural-1: önce ilk iki hinge arasını kontrol et ----------
+        # --- Kural-1: ilk iki hinge arası ---
         if len(hinges) >= 2:
             g12 = _gap(0, 1)
             if g12 < min_len:
@@ -446,15 +510,12 @@ def build_parts_with_restart_pair_removal(
                 b = int(h2["pos"])
                 if a <= b:
                     removed_frags.append((a, b))
-                # remove first two hinges, restart
                 del hinges[1]
                 del hinges[0]
                 continue
 
-        # ---------- Kural-1 (devam): ilk hinge'in başlangıç uzaklığı ----------
-        head_len = int(hinges[0]["pos"]) + 1  # [0..first_hinge] length
-        if head_len < min_len:
-            # sadece ilk hinge silinir ve (ilk residue .. ilk hinge) short frag'a eklenir
+        # --- Kural-1: ilk hinge başlangıç uzaklığı ---
+        if _head_len() < min_len:
             a = 0
             b = int(hinges[0]["pos"])
             if a <= b:
@@ -462,7 +523,7 @@ def build_parts_with_restart_pair_removal(
             del hinges[0]
             continue
 
-        # ---------- Kural-2: sonraki hinge çiftlerini bul, restart ederek çıkar ----------
+        # --- Kural-2: sonraki hinge çiftlerini bul ---
         if len(hinges) < 2:
             break
 
@@ -476,7 +537,6 @@ def build_parts_with_restart_pair_removal(
                 b = int(h2["pos"])
                 if a <= b:
                     removed_frags.append((a, b))
-                # remove the pair, restart
                 del hinges[i + 1]
                 del hinges[i]
                 removed_any = True
@@ -485,11 +545,11 @@ def build_parts_with_restart_pair_removal(
         if removed_any:
             continue
 
-        break  # no more removable pairs
+        break
 
     kept_pos = sorted({int(h["pos"]) for h in hinges if 0 <= int(h["pos"]) < n})
 
-    # ---------- Kural-3: non-overlap rigid parts ----------
+    # --- Kural-3: non-overlap parts (index bazlı böl) ---
     parts: List[Tuple[int, int]] = []
     if not kept_pos:
         parts = [(0, n - 1)]
@@ -498,12 +558,16 @@ def build_parts_with_restart_pair_removal(
         for p in kept_pos:
             if start <= p:
                 parts.append((start, p))
-            start = p + 1  # NON-OVERLAP: next starts at b+1
+            start = p + 1
         if start <= n - 1:
             parts.append((start, n - 1))
 
+    # >>> NEW: insertion residue(leri) sınırda önceki part'a kat
+    parts = _adjust_parts_for_insertions(parts, residue_list)
+
     short_frags = _merge_ranges(removed_frags, n)
     return parts, short_frags
+
 
 
 
@@ -556,8 +620,12 @@ def rigidparts_report_html(
 
             def _label_at(i: int) -> str:
                 if i == len(residue_list) - 1 and override_last:
-                    return str(override_last)
-                return residue_list[i]
+                    lab = str(override_last)
+                else:
+                    lab = residue_list[i]
+                # Sonunda harf varsa sil
+                return _strip_trailing_letters(str(lab))
+
 
             # Hinge residues: her rigid part'ın (son parça hariç) bitişi hinge olur
             hinge_res = [_label_at(b) for (a, b) in parts_idx[:-1]] if len(parts_idx) > 1 else []
