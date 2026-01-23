@@ -1076,14 +1076,24 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     
     
     def _make_mode_viewer(mode_pdb_path: str) -> W.Widget:
+        """
+        Mode PDB'yi Output widget içinde py3Dmol ile gösterir.
+        W.HTML/iframe yerine Output+display(HTML) kullanır -> localhost/sandbox sorunlarını keser.
+        """
         py3Dmol = _ensure_py3dmol()
     
         MODE_W = 560
         MODE_H = 280
     
-        holder = W.HTML(
-            value="<div style='font-family:Arial;color:#6b7280;'>Rendering 3D view…</div>",
-            layout=W.Layout(width=f"{MODE_W}px", height=f"{MODE_H}px"),
+        out = W.Output(
+            layout=W.Layout(
+                width=f"{MODE_W}px",
+                height=f"{MODE_H}px",
+                border="1px solid #e5e7eb",
+                border_radius="12px",
+                padding="6px",
+                overflow="hidden",
+            )
         )
     
         try:
@@ -1091,48 +1101,48 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             if not pdb_text.strip():
                 raise RuntimeError(f"Empty PDB: {mode_pdb_path}")
     
-            multi_pdb, nmodels = _build_multimodel_pdb_string(pdb_text)
-            bmin, bmax = _bfactor_minmax(multi_pdb)
+            # MODEL/ENDMDL var mı?
+            has_model = bool(re.search(r"^MODEL\b", pdb_text, flags=re.M))
+            nmodels = len(re.findall(r"^MODEL\b", pdb_text, flags=re.M)) if has_model else 1
     
-            view = py3Dmol.view(width=MODE_W, height=MODE_H)
-            view.setBackgroundColor("white")
+            bmin, bmax = _bfactor_minmax(pdb_text)
     
-            # web’de bulduğunuz mantık:
-            view.addModelsAsFrames(multi_pdb, "pdb")
+            v = py3Dmol.view(width=MODE_W - 12, height=MODE_H - 12)  # küçük pay bırak
+            v.setBackgroundColor("white")
     
-            view.setStyle(
+            # Web’deki mantık: trajectory/frame için addModelsAsFrames
+            if nmodels >= 2:
+                v.addModelsAsFrames(pdb_text, "pdb")
+            else:
+                v.addModel(pdb_text, "pdb")
+    
+            v.setStyle(
                 {},
                 {"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb", "min": float(bmin), "max": float(bmax)}}},
             )
-            view.zoomTo()
+            v.zoomTo()
     
             if nmodels >= 2:
-                view.animate({"loop": "backAndForth", "reps": 0, "interval": 180})
+                v.setFrame(0)
+                v.animate({"loop": "backAndForth", "reps": 0, "interval": 180})
     
-            raw = view._make_html()
+            raw = v._make_html()
             raw = _html_with_unique_divid(raw)
     
-            # HTML’i dosyaya yaz, /files ile iframe’den yükle (en stabil)
-            out_dir = os.path.dirname(os.path.abspath(mode_pdb_path))
-            html_path = os.path.join(out_dir, f"__hp_view_{Path(mode_pdb_path).stem}_{uuid.uuid4().hex}.html")
-            Path(html_path).write_text(raw, encoding="utf-8")
-    
-            holder.value = (
-                f"<iframe "
-                f"src='/files{html_path}' "
-                f"sandbox='allow-scripts allow-same-origin' "
-                f"style='width:{MODE_W}px;height:{MODE_H}px;border:1px solid #e5e7eb;border-radius:12px;'"
-                f"></iframe>"
-            )
+            with out:
+                clear_output(wait=True)
+                display(HTML(raw))
     
         except Exception as e:
-            holder.value = (
-                "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
-                f"Viewer error: {_safe_html(str(e))}"
-                "</div>"
-            )
+            with out:
+                clear_output(wait=True)
+                display(HTML(
+                    "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
+                    f"Viewer error: {_safe_html(str(e))}"
+                    "</div>"
+                ))
     
-        return W.HBox([holder], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
+        return W.HBox([out], layout=W.Layout(width="100%", justify_content="center"))
 
     
     
