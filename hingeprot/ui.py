@@ -941,8 +941,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
     def _make_mode_viewer(mode_pdb_path: str) -> W.Widget:
         """
-        modeX.pdb içindeki çoklu MODEL framelerini oynatır ve beta-factor'a göre renklendirir.
-        Colab/Jupyter'da JS çakışmalarını önlemek için iframe içinde render eder.
+        modeX.pdb içindeki MODEL framelerini oynatır ve beta-factor'a göre renklendirir.
+        En stabil yol: py3Dmol HTML'ini iframe srcdoc içine gömerek izole etmek.
+        Böylece localhost / /files bağımlılığı ve JS çakışmaları ortadan kalkar.
         """
         py3Dmol = _ensure_py3dmol()
 
@@ -956,11 +957,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
         try:
             pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
+            if not pdb_text.strip():
+                raise RuntimeError("Empty PDB text.")
+
             bmin, bmax = _bfactor_minmax(pdb_text)
 
-            # Kaç frame var? (MODEL satırları)
+            # Kaç frame var?
             nframes = len(re.findall(r"^MODEL\b", pdb_text, flags=re.M))
-
+    
             v = py3Dmol.view(width=MODE_W, height=MODE_H)
             v.setBackgroundColor("white")
 
@@ -969,7 +973,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             else:
                 v.addModel(pdb_text, "pdb")
 
-            # B-factor ile renklendirme (daha güvenli gradient: roygb)
+            # B-factor ile renklendirme
             style = {
                 "cartoon": {
                     "colorscheme": {
@@ -981,8 +985,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 }
             }
 
-            # Çok-frame ise: stili tüm modellere uygula (aksi halde bazı frameler boş kalabiliyor)
             if nframes >= 2:
+                # tüm framelere uygula
                 for i in range(nframes):
                     v.setStyle({"model": i}, style)
                 v.setFrame(0)
@@ -995,32 +999,18 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             raw = v._make_html()
             raw = _html_with_unique_divid(raw)
 
-            # --- iframe ile izole et (en stabil yöntem) ---
-            in_colab = False
-            try:
-                from google.colab import files  # noqa: F401
-                in_colab = True
-            except Exception:
-                in_colab = False
+            # ---- iframe srcdoc ile izole et (localhost hatasını kesin çözer) ----
+            import html as _htmlmod
+            srcdoc = _htmlmod.escape(raw, quote=True)
 
-            if in_colab and os.path.isabs(mode_pdb_path) and mode_pdb_path.startswith("/content/"):
-                html_path = f"{mode_pdb_path}.viewer_{uuid.uuid4().hex}.html"
-                Path(html_path).write_text(raw, encoding="utf-8", errors="ignore")
-                iframe_html = (
-                    f"<iframe src='/files{html_path}' "
-                    f"style='width:{MODE_W}px;height:{MODE_H}px;border:1px solid #e5e7eb;border-radius:12px;'"
-                    f"></iframe>"
-                )
-            else:
-                # fallback: data URL
-                b64 = base64.b64encode(raw.encode("utf-8")).decode("ascii")
-                iframe_html = (
-                    f"<iframe src='data:text/html;base64,{b64}' "
-                    f"style='width:{MODE_W}px;height:{MODE_H}px;border:1px solid #e5e7eb;border-radius:12px;'"
-                    f"></iframe>"
-                )
-
-            holder.value = iframe_html
+            holder.value = (
+                f"<iframe "
+                f"sandbox='allow-scripts' "
+                f"srcdoc=\"{srcdoc}\" "
+                f"style='width:{MODE_W}px;height:{MODE_H}px;"
+                f"border:1px solid #e5e7eb;border-radius:12px;'"
+                f"></iframe>"
+            )
 
         except Exception as e:
             holder.value = (
