@@ -1089,9 +1089,65 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             multi += "ENDMDL\n"
     
         return multi, len(models)
-    
 
-    def _make_mode_viewer(mode_pdb_path: str):
+        # ---------- NEW: STEP_*_ANMLD.pdb -> trajectory helpers ----------
+    _STEP_RE = re.compile(r"STEP[_-]?(\d+)", re.IGNORECASE)
+
+    def _step_index(p: Path) -> int:
+        m = _STEP_RE.search(p.name)
+        return int(m.group(1)) if m else 10**9
+
+    def _collect_step_pdbs(out_dir: Path, mode: int) -> list[Path]:
+        """
+        Mode'a ait STEP frame'lerini olabildiğince sağlam yakala.
+        Önce mode'a özel klasör/pattern dener, bulamazsa tüm STEP'lere fallback yapar.
+        """
+        patterns = [
+            f"**/mode{mode}/STEP_*_ANMLD.pdb",
+            f"**/MODE{mode}/STEP_*_ANMLD.pdb",
+            f"**/*mode{mode}*/STEP_*_ANMLD.pdb",
+            f"**/*MODE{mode}*/STEP_*_ANMLD.pdb",
+            f"**/*moved{mode}*/STEP_*_ANMLD.pdb",
+        ]
+
+        found: list[Path] = []
+        for pat in patterns:
+            found = list(out_dir.glob(pat))
+            if found:
+                break
+
+        if not found:
+            # son çare: her şeyi topla
+            found = list(out_dir.rglob("STEP_*_ANMLD.pdb"))
+
+        # unique + STEP sırasına göre sort
+        uniq = sorted({p.resolve() for p in found}, key=lambda x: (_step_index(x), str(x)))
+        return uniq
+
+    def _concat_steps_as_models(pdb_files: list[Path], max_frames: int = 200) -> tuple[str, int]:
+        """
+        STEP dosyalarını MODEL/ENDMDL ile birleştir.
+        Çok fazlaysa stride ile seyrekleştir.
+        """
+        if not pdb_files:
+            return "", 0
+
+        files = pdb_files
+        if len(files) > max_frames:
+            stride = max(1, len(files) // max_frames)
+            files = files[::stride]
+
+        chunks: list[str] = []
+        for i, f in enumerate(files, start=1):
+            chunks.append(f"MODEL        {i}\n")
+            # mevcut helper'ını kullanıyoruz: MODEL/ENDMDL/END satırlarını temizler
+            chunks.append(_read_pdb_for_frames(str(f)))
+            chunks.append("ENDMDL\n")
+
+        return "".join(chunks), len(files)
+
+
+    def _make_mode_viewer_from_file(mode_pdb_path: str):
         """
         Colab'da: /files + iframe (mevcut stabil yöntem)
         Localhost'ta: data:text/html;base64 + iframe (artık /files/content/... sorunu yok)
@@ -1147,6 +1203,66 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
         return W.HBox([holder], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
 
+    def _make_mode_viewer_from_steps(out_dir: str, mode: int, fallback_mode_pdb: str | None = None):
+        """
+        1) Önce STEP_*_ANMLD.pdb framelerini bul -> animasyon göster
+        2) Bulamazsa fallback olarak mode1/mode2 pdb dosyasını göster
+        """
+        py3Dmol = _ensure_py3dmol()
+
+        MODE_W = 560
+        MODE_H = 280
+
+        holder = W.HTML(
+            value="<div style='font-family:Arial;color:#6b7280;'>Rendering mode trajectory…</div>",
+            layout=W.Layout(width=f"{MODE_W}px", height=f"{MODE_H}px"),
+        )
+
+        try:
+            od = Path(out_dir)
+            if not od.exists():
+                raise RuntimeError(f"Output dir not found: {out_dir}")
+
+            step_files = _collect_step_pdbs(od, mode)
+
+            # STEP frameleri gerçekten varsa onları kullan
+            if len(step_files) >= 2:
+                multi_pdb, nmodels = _concat_steps_as_models(step_files)
+
+                v = py3Dmol.view(width=MODE_W, height=MODE_H)
+                v.setBackgroundColor("white")
+                v.addModelsAsFrames(multi_pdb, "pdb")
+                v.setStyle({"cartoon": {"color": "spectrum"}})
+                v.zoomTo()
+                v.animate({"loop": "backAndForth", "reps": 0, "interval": 180})
+
+                raw = _html_with_unique_divid(v._make_html())
+                doc = _wrap_html_doc(raw)
+                holder.value = _iframe_from_html_doc(doc, MODE_W, MODE_H)
+
+            else:
+                # frameler yoksa fallback
+                if fallback_mode_pdb and os.path.exists(fallback_mode_pdb) and os.path.getsize(fallback_mode_pdb) > 0:
+                    return _make_mode_viewer_from_file(fallback_mode_pdb)
+                raise RuntimeError("STEP_*_ANMLD.pdb frameleri bulunamadı (ve fallback mode pdb de yok).")
+
+        except Exception as e:
+            holder.value = (
+                "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
+                f"Mode viewer error: {_safe_html(str(e))}"
+                "</div>"
+            )
+
+        return W.HBox([holder], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
+
+    def _make_mode_viewer(mode: int):
+        """
+        Tek giriş noktası: state'den out_dir + fallback mode.pdb alıp STEP'ten göstermeyi dener.
+        """
+        out_dir = state.get("mode_steps_dir") or state.get("last_out_dir")
+        mf = state.get("mode_files", {}) or {}
+        return _make_mode_viewer_from_steps(out_dir, int(mode), mf.get(int(mode)))
+    
     
     
     # chain colors (deterministic per detected order)
@@ -1543,6 +1659,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         "hingeprot_dir": None,
         "last_out_dir": None,
         "mode_files": {},   # {1: "/path/...mode1.pdb", 2: "/path/...mode2.pdb"}
+        "mode_steps_dir": None,  # NEW: STEP_* frame'lerinin aranacağı klasör (dest_out_dir)
+
     }
     global LAST_UI_STATE
     LAST_UI_STATE = state
@@ -1975,6 +2093,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
             state["last_out_dir"] = dest_out_dir
 
+            state["mode_steps_dir"] = dest_out_dir   # NEW: STEP frameleri burada aranacak
 
             
 
@@ -2082,6 +2201,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         state["pdb_tag"] = None
         state["hingeprot_dir"] = None
         state["last_out_dir"] = None
+        state["mode_steps_dir"] = None
 
         state["detected_chains"] = []
         state["chain_cbs"] = {}
@@ -2185,15 +2305,10 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     _mode_placeholder()
 
     def _render_mode(m: int):
-        """Tek viewer alanını seçilen mode ile güncelle."""
-        mf = state.get("mode_files", {}) or {}
-        if m not in mf:
-            _mode_placeholder("Selected mode file not found.")
-            return
         with mode_view_container:
             clear_output(wait=True)
-            display(_make_mode_viewer(mf[m]))  # senin mevcut viewer fonksiyonun
-
+            display(_make_mode_viewer(int(m)))
+            
     def _set_mode_viewer_files(mode_files: dict[int, str]):
         """
         Run bitince çağrılacak:
