@@ -593,14 +593,52 @@ def rigidparts_report_widget_from_report(
 
     blocks: list[W.Widget] = []
 
+    # -------------------- SINGLE Mode Viewer (stable in Colab) --------------------
+    mode_paths = {}
+    for m in (1, 2):
+        p = os.path.join(out_dir, f"{pdb_label}.mode{m}.pdb")
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            mode_paths[m] = p
+
+    if mode_paths:
+        title = W.HTML(
+            "<div style='text-align:center;font-family:Arial;font-weight:900;color:#111827;margin:6px 0 2px 0;'>"
+            "Mode Viewer</div>"
+        )
+
+        opts = [(f"Mode {m}", str(m)) for m in sorted(mode_paths.keys())]
+        mode_sel = W.ToggleButtons(
+            options=opts,
+            value=opts[0][1],
+            layout=W.Layout(width="320px"),
+            style={"button_width": "150px"},
+        )
+
+        mode_out = W.Output(
+            layout=W.Layout(
+                width="580px",
+                border="1px solid #e5e7eb",
+                border_radius="12px",
+                padding="6px",
+            )
+        )
+
+        def _do_render(*_):
+            m = int(mode_sel.value)
+            _render_mode_into_output(mode_out, mode_paths[m])
+
+        mode_sel.observe(lambda ch: _do_render(), names="value")
+        _do_render()
+
+        blocks.append(W.VBox(
+            [title, W.HBox([mode_sel], layout=W.Layout(justify_content="center")), mode_out],
+            layout=W.Layout(width="100%", gap="6px", align_items="center")
+        ))
+
+
+
     for mode in sorted(report.keys()):
         # --- NEW: Mode 1/2 mini-viewer (başlığın üstüne, ortalı) ---
-        if mode_viewer_fn is not None and mode in (1, 2):
-            mfile = _locate_mode_pdb(out_dir, pdb_label, mode)
-            if mfile:
-                blocks.append(mode_viewer_fn(mfile))
-
-
  
         # --- header text ---
         header_text = W.HTML(
@@ -1075,74 +1113,156 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         return multi, len(models)
     
     
-    def _make_mode_viewer(mode_pdb_path: str) -> W.Widget:
-        """
-        Mode PDB'yi Output widget içinde py3Dmol ile gösterir.
-        W.HTML/iframe yerine Output+display(HTML) kullanır -> localhost/sandbox sorunlarını keser.
-        """
-        py3Dmol = _ensure_py3dmol()
-    
-        MODE_W = 560
-        MODE_H = 280
-    
-        out = W.Output(
-            layout=W.Layout(
-                width=f"{MODE_W}px",
-                height=f"{MODE_H}px",
-                border="1px solid #e5e7eb",
-                border_radius="12px",
-                padding="6px",
-                overflow="hidden",
-            )
+def _standardize_pdb_for_3dmol(pdb_text: str) -> str:
+    """
+    Sizin mode*.pdb dosyaları whitespace formatında.
+    3Dmol bazen böyle dosyalarda takılabiliyor.
+    Burada ATOM satırlarını fixed-column PDB formatına normalize ediyoruz.
+    """
+    out = []
+    for ln in (pdb_text or "").splitlines():
+        s = ln.rstrip("\n")
+        if s.startswith(("MODEL", "ENDMDL")):
+            out.append(s)
+            continue
+        if s.startswith("END"):
+            continue
+
+        if not s.startswith(("ATOM", "HETATM")):
+            out.append(s)
+            continue
+
+        parts = s.split()
+        # beklenen: ATOM serial atom resn chain resi x y z occ b
+        if len(parts) < 11:
+            out.append(s)
+            continue
+
+        rec = parts[0]
+        try:
+            serial = int(float(parts[1]))
+            atom = parts[2]
+            resn = parts[3]
+            chain = parts[4][0]
+            resi = int(float(parts[5]))
+            x = float(parts[6]); y = float(parts[7]); z = float(parts[8])
+            occ = float(parts[9]); b = float(parts[10])
+        except Exception:
+            out.append(s)
+            continue
+
+        # element tahmini (CA -> C)
+        elem = (atom[0] if atom else "C").upper()
+
+        # fixed-column PDB satırı
+        # 1-6 rec, 7-11 serial, 13-16 atom, 18-20 resn, 22 chain, 23-26 resi, 31-54 xyz, 55-60 occ, 61-66 b, 77-78 element
+        out.append(
+            f"{rec:<6}{serial:>5}  {atom:<4}{resn:>3} {chain:1}{resi:>4}    "
+            f"{x:>8.3f}{y:>8.3f}{z:>8.3f}{occ:>6.2f}{b:>6.2f}          {elem:>2}"
         )
-    
+
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _to_multimodel_pdb_string(pdb_text: str) -> tuple[str, int]:
+    """
+    Dosyada MODEL/ENDMDL varsa aynen kullanır.
+    Yoksa tek model olarak sarar.
+    Ayrıca finalde END ekler.
+    """
+    txt = _standardize_pdb_for_3dmol(pdb_text)
+    lines = txt.splitlines()
+
+    has_model = any(ln.startswith("MODEL") for ln in lines)
+    if not has_model:
+        mm = "MODEL        1\n" + txt + "ENDMDL\nEND\n"
+        return mm, 1
+
+    # MODEL bloklarını temizce yeniden paketle (garanti olsun)
+    models = []
+    cur = None
+    for ln in lines:
+        if ln.startswith("MODEL"):
+            cur = []
+            continue
+        if ln.startswith("ENDMDL"):
+            if cur is not None:
+                models.append(cur)
+            cur = None
+            continue
+        if ln.startswith("END"):
+            continue
+        if cur is not None:
+            cur.append(ln)
+
+    if not models:
+        mm = "MODEL        1\n" + txt + "ENDMDL\nEND\n"
+        return mm, 1
+
+    out = []
+    for i, mlines in enumerate(models, start=1):
+        out.append(f"MODEL        {i}")
+        out.extend(mlines)
+        out.append("ENDMDL")
+    out.append("END")
+    return "\n".join(out) + "\n", len(models)
+
+
+def _render_mode_into_output(out_widget: W.Output, mode_pdb_path: str) -> None:
+    """
+    TEK Output widget içinde mode viewer render eder.
+    Böylece Colab’da birden fazla py3Dmol çakışması engellenir.
+    """
+    py3Dmol = _ensure_py3dmol()
+
+    with out_widget:
+        clear_output(wait=True)
+
         try:
             pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
             if not pdb_text.strip():
                 raise RuntimeError(f"Empty PDB: {mode_pdb_path}")
-    
-            # MODEL/ENDMDL var mı?
-            has_model = bool(re.search(r"^MODEL\b", pdb_text, flags=re.M))
-            nmodels = len(re.findall(r"^MODEL\b", pdb_text, flags=re.M)) if has_model else 1
-    
-            bmin, bmax = _bfactor_minmax(pdb_text)
-    
-            v = py3Dmol.view(width=MODE_W - 12, height=MODE_H - 12)  # küçük pay bırak
+
+            mm_text, nmodels = _to_multimodel_pdb_string(pdb_text)
+            bmin, bmax = _bfactor_minmax(mm_text)
+
+            W0, H0 = 560, 280
+            v = py3Dmol.view(width=W0, height=H0)
             v.setBackgroundColor("white")
-    
-            # Web’deki mantık: trajectory/frame için addModelsAsFrames
+
             if nmodels >= 2:
-                v.addModelsAsFrames(pdb_text, "pdb")
+                v.addModelsAsFrames(mm_text, "pdb")
             else:
-                v.addModel(pdb_text, "pdb")
-    
+                v.addModel(mm_text, "pdb")
+
             v.setStyle(
                 {},
                 {"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb", "min": float(bmin), "max": float(bmax)}}},
             )
             v.zoomTo()
-    
-            if nmodels >= 2:
-                v.setFrame(0)
-                v.animate({"loop": "backAndForth", "reps": 0, "interval": 180})
-    
+
+            # Animate bazen Colab’da viewer’ı boşaltabiliyor -> butonla kontrol edeceğiz.
+            # O yüzden otomatik animate ETMİYORUZ.
+
             raw = v._make_html()
             raw = _html_with_unique_divid(raw)
-    
-            with out:
-                clear_output(wait=True)
-                display(HTML(raw))
-    
-        except Exception as e:
-            with out:
-                clear_output(wait=True)
+            display(HTML(raw))
+
+            # Basit bir “Play” butonu: (isteğe bağlı) JS ile animate tetikler
+            # Colab’da her zaman güvenilir değil, ama çoğu zaman çalışır.
+            if nmodels >= 2:
                 display(HTML(
-                    "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
-                    f"Viewer error: {_safe_html(str(e))}"
+                    "<div style='font-family:Arial;color:#6b7280;font-size:12px;margin-top:6px;text-align:center;'>"
+                    "Frames loaded. (If you want animation, we can add a dedicated JS trigger.)"
                     "</div>"
                 ))
-    
-        return W.HBox([out], layout=W.Layout(width="100%", justify_content="center"))
+
+        except Exception as e:
+            display(HTML(
+                "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
+                f"Mode viewer error: {_safe_html(str(e))}"
+                "</div>"
+            ))
 
     
     
@@ -1980,7 +2100,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                     short_frags_by_mode=short_frags_by_mode,
                     out_dir=dest_out_dir,
                     download_fn=_download_file,
-                    mode_viewer_fn=_make_mode_viewer,               # <-- NEW
+                    mode_viewer_fn=None,   # artık kullanılmıyor
                 ),
             )
 
