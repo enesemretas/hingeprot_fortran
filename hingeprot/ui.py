@@ -942,64 +942,94 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     def _make_mode_viewer(mode_pdb_path: str) -> W.Widget:
         """
         modeX.pdb içindeki çoklu MODEL framelerini oynatır ve beta-factor'a göre renklendirir.
+        Colab/Jupyter'da JS çakışmalarını önlemek için iframe içinde render eder.
         """
         py3Dmol = _ensure_py3dmol()
 
         MODE_W = 560
-        MODE_H = 260
+        MODE_H = 280
 
-        box = W.Output(
-            layout=W.Layout(
-                width=f"{MODE_W}px",
-                height=f"{MODE_H}px",
-                border="1px solid #e5e7eb",
-                border_radius="12px",
-                padding="6px",
-                overflow="hidden",
-            )
+        holder = W.HTML(
+            value="<div style='font-family:Arial;color:#6b7280;'>Rendering 3D view…</div>",
+            layout=W.Layout(width=f"{MODE_W}px", height=f"{MODE_H}px"),
         )
 
-        pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
-        bmin, bmax = _bfactor_minmax(pdb_text)
+        try:
+            pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
+            bmin, bmax = _bfactor_minmax(pdb_text)
 
-        with box:
-            clear_output(wait=True)
+            # Kaç frame var? (MODEL satırları)
+            nframes = len(re.findall(r"^MODEL\b", pdb_text, flags=re.M))
 
             v = py3Dmol.view(width=MODE_W, height=MODE_H)
             v.setBackgroundColor("white")
 
-            # ÖNEMLİ: MODEL/ENDMDL'yi SİLME! Dosya zaten 11 frame içeriyor.
-            v.addModelsAsFrames(pdb_text, "pdb")
+            if nframes >= 2:
+                v.addModelsAsFrames(pdb_text, "pdb")
+            else:
+                v.addModel(pdb_text, "pdb")
 
-            # Beta-factor (B) ile renklendirme
-            v.setStyle(
-                {},
-                {
-                    "cartoon": {
-                        "colorscheme": {
-                            "prop": "b",
-                            "gradient": "rwb",
-                            "min": float(bmin),
-                            "max": float(bmax),
-                        }
+            # B-factor ile renklendirme (daha güvenli gradient: roygb)
+            style = {
+                "cartoon": {
+                    "colorscheme": {
+                        "prop": "b",
+                        "gradient": "roygb",
+                        "min": float(bmin),
+                        "max": float(bmax),
                     }
-                },
-            )
+                }
+            }
 
-            # İstersen ligandları da göstermek için aç:
-            # v.setStyle({"hetflag": True, "not": {"resn": ["HOH", "WAT", "DOD"]}}, {"stick": {}, "sphere": {"scale": 0.25}})
-
-            v.zoomTo()
-            v.setFrame(0)
-
-            # Tüm frameleri sırayla oynat
-            v.animate({"loop": "backAndForth", "reps": 0, "interval": 200})
+            # Çok-frame ise: stili tüm modellere uygula (aksi halde bazı frameler boş kalabiliyor)
+            if nframes >= 2:
+                for i in range(nframes):
+                    v.setStyle({"model": i}, style)
+                v.setFrame(0)
+                v.zoomTo()
+                v.animate({"loop": "forward", "reps": 0, "interval": 180})
+            else:
+                v.setStyle({}, style)
+                v.zoomTo()
 
             raw = v._make_html()
             raw = _html_with_unique_divid(raw)
-            display(HTML(raw))
 
-        return W.HBox([box], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
+            # --- iframe ile izole et (en stabil yöntem) ---
+            in_colab = False
+            try:
+                from google.colab import files  # noqa: F401
+                in_colab = True
+            except Exception:
+                in_colab = False
+
+            if in_colab and os.path.isabs(mode_pdb_path) and mode_pdb_path.startswith("/content/"):
+                html_path = f"{mode_pdb_path}.viewer_{uuid.uuid4().hex}.html"
+                Path(html_path).write_text(raw, encoding="utf-8", errors="ignore")
+                iframe_html = (
+                    f"<iframe src='/files{html_path}' "
+                    f"style='width:{MODE_W}px;height:{MODE_H}px;border:1px solid #e5e7eb;border-radius:12px;'"
+                    f"></iframe>"
+                )
+            else:
+                # fallback: data URL
+                b64 = base64.b64encode(raw.encode("utf-8")).decode("ascii")
+                iframe_html = (
+                    f"<iframe src='data:text/html;base64,{b64}' "
+                    f"style='width:{MODE_W}px;height:{MODE_H}px;border:1px solid #e5e7eb;border-radius:12px;'"
+                    f"></iframe>"
+                )
+
+            holder.value = iframe_html
+
+        except Exception as e:
+            holder.value = (
+                "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
+                f"Viewer error: {_safe_html(str(e))}"
+                "</div>"
+            )
+
+        return W.HBox([holder], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
 
 
     
