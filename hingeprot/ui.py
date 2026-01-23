@@ -12,6 +12,9 @@ import subprocess
 import requests
 import ipywidgets as W
 from IPython.display import display, clear_output, HTML
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional, Any
+
 
 
 LAST_UI_STATE: dict | None = None
@@ -174,6 +177,300 @@ def _find_hinges_file(out_dir: str, pdb_filename: str) -> str | None:
         if os.path.exists(p) and os.path.getsize(p) > 0:
             return p
     return None
+
+# ------------------------- rigid parts report helpers -------------------------
+
+def _parse_pdb_like_chain_resid(line: str) -> Optional[Tuple[str, str]]:
+    """Parse (chain, resid) from ATOM/HETATM lines."""
+    if not (line.startswith("ATOM") or line.startswith("HETATM")):
+        return None
+
+    parts = line.split()
+    if len(parts) >= 6:
+        chain = parts[4].strip()
+        resid = parts[5].strip()
+        if chain and resid:
+            return chain, resid
+
+    # fixed-column fallback
+    if len(line) < 27:
+        return None
+    chain = line[21].strip()
+    resnum = line[22:26].strip()
+    icode = line[26].strip()
+    resid = (resnum + icode).strip()
+    if chain and resid:
+        return chain, resid
+    return None
+
+
+def read_residue_order_from_pdb(pdb_path: Path) -> Dict[str, List[str]]:
+    residues_by_chain: Dict[str, List[str]] = {}
+    last: Optional[Tuple[str, str]] = None
+
+    with pdb_path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            parsed = _parse_pdb_like_chain_resid(line)  # seninki zaten ATOM/HETATM parse ediyor
+            if not parsed:
+                continue
+            chain, resid = parsed
+            key = (chain, resid)
+            if key == last:
+                continue
+            residues_by_chain.setdefault(chain, []).append(resid)
+            last = key
+
+    return residues_by_chain
+
+
+
+def parse_hinge_file(hinge_path: Path) -> Dict[int, Dict[str, List[Tuple[int, str]]]]:
+    """
+    Parses a .hinge file with headers like:
+      ----> crosscorrelation : 1st slowest mode
+    and data lines like:
+      <seq_idx> <resid> <chain>
+    Returns: modes[mode][chain] = [(seq_idx, resid), ...]
+    """
+    modes: Dict[int, Dict[str, List[Tuple[int, str]]]] = {}
+    mode: Optional[int] = None
+
+    def _mode_from_header(s: str) -> Optional[int]:
+        s_low = s.lower()
+        if "1st" in s_low:
+            return 1
+        if "2nd" in s_low:
+            return 2
+        m = re.search(r"(\d+)", s_low)
+        return int(m.group(1)) if m else None
+
+    with hinge_path.open("r", encoding="utf-8", errors="replace") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line:
+                continue
+
+            if line.startswith("---->"):
+                mode = _mode_from_header(line)
+                continue
+
+            if mode is None:
+                continue
+
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+
+            try:
+                seq_idx = int(float(parts[0]))
+            except Exception:
+                continue
+
+            resid_token = parts[-2].strip()
+            chain = parts[-1].strip()[:1]
+            if not resid_token or not chain:
+                continue
+
+            modes.setdefault(mode, {}).setdefault(chain, []).append((seq_idx, resid_token))
+
+    for m in modes:
+        for ch in modes[m]:
+            modes[m][ch].sort(key=lambda x: x[0])
+
+    return modes
+
+
+def _merge_ranges(ranges: List[Tuple[int, int]], n: int) -> List[Tuple[int, int]]:
+    if not ranges:
+        return []
+    rr = []
+    for a, b in ranges:
+        if a > b:
+            a, b = b, a
+        a = max(0, a)
+        b = min(n - 1, b)
+        if a <= b:
+            rr.append((a, b))
+    rr.sort()
+
+    merged: List[Tuple[int, int]] = []
+    for a, b in rr:
+        if not merged:
+            merged.append((a, b))
+        else:
+            pa, pb = merged[-1]
+            if a <= pb + 1:
+                merged[-1] = (pa, max(pb, b))
+            else:
+                merged.append((a, b))
+    return merged
+
+
+def build_parts_with_restart_pair_removal(
+    residue_list: List[str],
+    hinge_entries: List[Tuple[int, str]],
+    min_len: int,
+) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
+    """
+    - seq_idx-gap < min_len olan komşu hinge çiftleri içinden EN KÜÇÜK gap seçilir
+    - o çiftin İKİ hinge'i de kaldırılır
+    - her kaldırmadan sonra baştan taranır (restart)
+    Returns:
+      parts_idx: rigid parts index ranges
+      short_frags: removed short fragments index ranges (merged)
+    """
+    n = len(residue_list)
+    if n == 0:
+        return [], []
+
+    idx_map = {rid: i for i, rid in enumerate(residue_list)}
+
+    hinges: List[Dict[str, Any]] = []
+    for seq_idx, resid in hinge_entries:
+        if resid in idx_map:
+            pos = idx_map[resid]
+        else:
+            pos = seq_idx - 1
+            if not (0 <= pos < n):
+                continue
+        hinges.append({"seq": int(seq_idx), "pos": int(pos), "resid": str(resid)})
+
+    # deduplicate by position
+    tmp: Dict[int, Dict[str, Any]] = {}
+    for h in hinges:
+        p = int(h["pos"])
+        if p not in tmp or int(h["seq"]) < int(tmp[p]["seq"]):
+            tmp[p] = h
+    hinges = sorted(tmp.values(), key=lambda x: int(x["seq"]))
+
+    removed_frags: List[Tuple[int, int]] = []
+
+    def _pick_pair_index(hs: List[Dict[str, Any]]) -> Optional[int]:
+        best_i: Optional[int] = None
+        best_gap: Optional[int] = None
+        for i in range(len(hs) - 1):
+            gap = int(hs[i + 1]["seq"]) - int(hs[i]["seq"])
+            if gap < min_len:
+                if best_gap is None or gap < best_gap:
+                    best_gap = gap
+                    best_i = i
+        return best_i
+
+    while True:
+        if len(hinges) < 2:
+            break
+        i = _pick_pair_index(hinges)
+        if i is None:
+            break
+
+        h1 = hinges[i]
+        h2 = hinges[i + 1]
+
+        a = int(h1["pos"]) + 1
+        b = int(h2["pos"])
+        if a <= b:
+            removed_frags.append((a, b))
+
+        del hinges[i + 1]
+        del hinges[i]
+
+    kept_pos = sorted({int(h["pos"]) for h in hinges if 0 <= int(h["pos"]) < n})
+
+    parts: List[Tuple[int, int]] = []
+    start = 0
+    for p in kept_pos:
+        if start <= p:
+            parts.append((start, p))
+        start = p + 1
+    if start <= n - 1:
+        parts.append((start, n - 1))
+    if not parts:
+        parts = [(0, n - 1)]
+
+    short_frags = _merge_ranges(removed_frags, n)
+    return parts, short_frags
+
+
+def rigidparts_report_html(
+    pdb_label: str,
+    residues_by_chain: Dict[str, List[str]],
+    modes: Dict[int, Dict[str, List[Tuple[int, str]]]],
+    chains_str: str,
+    min_len: int,
+) -> str:
+    """HingeProt web’e benzer HTML tablo çıktısı."""
+    want = set(list(chains_str)) if chains_str else None
+
+    def _css_cell() -> str:
+        return "padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;"
+
+    blocks: List[str] = []
+    for mode in sorted(modes.keys()):
+        blocks.append(
+            f"<div style='margin:10px 0 6px 0;color:#dc2626;font-weight:900;'>"
+            f"----&gt; slowest mode {mode}: {pdb_label}"
+            f"</div>"
+        )
+
+        chains = sorted(modes.get(mode, {}).keys())
+        if want is not None:
+            chains = [c for c in chains if c in want]
+
+        for ch in chains:
+            residue_list = residues_by_chain.get(ch, [])
+            hinge_entries = modes.get(mode, {}).get(ch, [])
+            if not residue_list:
+                blocks.append(f"<div style='margin:6px 0;'>Chain {ch}: not found in .new</div>")
+                continue
+            if not hinge_entries:
+                blocks.append(f"<div style='margin:6px 0;'>Chain {ch}: no hinge entries</div>")
+                continue
+
+            parts_idx, short_frags = build_parts_with_restart_pair_removal(
+                residue_list=residue_list,
+                hinge_entries=hinge_entries,
+                min_len=min_len,
+            )
+
+            hinge_res = [residue_list[b] for (a, b) in parts_idx[:-1]] if len(parts_idx) > 1 else []
+
+            rows = []
+            for i, (a, b) in enumerate(parts_idx, start=1):
+                rows.append(
+                    f"<tr>"
+                    f"<td style='{_css_cell()}'>{i}</td>"
+                    f"<td style='{_css_cell()}'>{residue_list[a]}-{residue_list[b]}</td>"
+                    f"</tr>"
+                )
+
+            short_html = ""
+            if short_frags:
+                items = []
+                for k, (a, b) in enumerate(short_frags, start=1):
+                    items.append(f"<div style='margin:2px 0;'>{k}. {residue_list[a]}-{residue_list[b]}</div>")
+                short_html = (
+                    "<div style='margin-top:10px;color:#dc2626;font-weight:900;'>Short Flexible Fragments:</div>"
+                    + "".join(items)
+                )
+
+            blocks.append(
+                f"<div style='margin:8px 0 14px 0;'>"
+                f"<div style='font-weight:900;margin-bottom:4px;'>Chain {ch}</div>"
+                f"<table style='width:100%;border-collapse:collapse;'>"
+                f"<thead><tr>"
+                f"<th style='text-align:left;{_css_cell()}border-bottom:2px solid #e5e7eb;'>Rigid Part No</th>"
+                f"<th style='text-align:left;{_css_cell()}border-bottom:2px solid #e5e7eb;'>Residues</th>"
+                f"</tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody>"
+                f"</table>"
+                f"<div style='margin-top:6px;color:#1d4ed8;font-weight:900;'>"
+                f"Hinge residues: {' '.join(hinge_res) if hinge_res else '-'}"
+                f"</div>"
+                f"{short_html}"
+                f"</div>"
+            )
+
+    return "<div style='font-family:Arial, Helvetica, sans-serif;'>" + "".join(blocks) + "</div>"
 
 
 # ----------------------------- UI -----------------------------
@@ -566,6 +863,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     btn_run_fortran = W.Button(description="Run HingeProt", button_style="primary", icon="play", layout=W.Layout(width="320px"))
     btn_clear = W.Button(description="Clear", button_style="warning", icon="trash", layout=W.Layout(width="180px"))
 
+    table_box = W.HTML("<div></div>")
+
     status_box = W.HTML('<div class="hp-pre">Load a PDB to detect chains.</div>')
 
     def _set_status(text: str):
@@ -865,6 +1164,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     # ---------- actions ----------
     def on_load_clicked(_):
         progress.value = 0
+        table_box.value = "<div></div>"
         progress.bar_style = "info"
         state["last_out_dir"] = None
 
@@ -975,7 +1275,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             captured = _capture_inputs()
             global LAST_INPUTS
             LAST_INPUTS = captured
-
+            table_box.value = "<div style='font-family:Arial; color:#6b7280;'>Running HingeProt…</div>"
             progress.value = 1
             _ensure_libg2c()
 
@@ -1026,26 +1326,45 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 except Exception:
                     pass
 
-            hinges_fp = _find_hinges_file(dest_out_dir, pdb_filename)
-            if hinges_fp:
-                txt = _read_text_file(hinges_fp, max_lines=900)
-                _set_status(txt)
-            else:
-                _set_status(
-                    "Run completed, but hinges file not found.\n"
-                    f"Expected: {pdb_filename}.new.hinges (or fallback)\n"
-                    f"Output folder: {dest_out_dir}"
-                )
+            # ---------- build rigid parts table ----------
+            pdb_chain_path = Path(dest_out_dir) / "pdb"
+            if not pdb_chain_path.exists():
+                # fallback: bazı durumlarda sadece orijinal PDB kalır
+                pdb_chain_path = Path(dest_out_dir) / pdb_filename
+
+            if not pdb_chain_path.exists():
+                raise RuntimeError(f"Chain PDB file not found (expected 'pdb' or '{pdb_filename}') in: {dest_out_dir}")
+
+            residues_by_chain = read_residue_order_from_pdb(pdb_chain_path)
+            modes = parse_hinge_file(Path(hinge_path))
+
+            if not residues_by_chain:
+                raise RuntimeError("No residues parsed from .new file (PDB-like ATOM/HETATM expected).")
+            if not modes:
+                raise RuntimeError("No hinge modes parsed from .hinge file.")
+
+            # HingeProt server'daki min_len mantığı (processHinges çağrısında da 15 var)
+            min_len = 15
+
+            table_box.value = rigidparts_report_html(
+                pdb_label=pdb_filename,
+                residues_by_chain=residues_by_chain,
+                modes=modes,
+                chains_str=captured["chains_str"],
+                min_len=min_len,
+            )
 
             progress.value = 4
             progress.bar_style = "success"
 
         except Exception as e:
             progress.bar_style = "danger"
+            table_box.value = "<div style='color:#dc2626;font-weight:800;'>ERROR</div>"
             _set_status(f"ERROR: {e}")
 
     def on_clear_clicked(_):
         pdb_code.value = ""
+        table_box.value = "<div></div>"
         input_mode.value = "code"
         state["upload_name"] = None
         state["upload_bytes"] = None
@@ -1099,8 +1418,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     )
     form_card.add_class("hp-card")
 
-    output_title = W.HTML("<b>Hinges Output</b>")
-    output_card = W.VBox([output_title, status_box], layout=W.Layout(width="100%", gap="8px"))
+    output_title = W.HTML("<b>Rigid Parts & Short Flexible Fragments</b>")
+    output_card = W.VBox([output_title, table_box, status_box], layout=W.Layout(width="100%", gap="8px"))
     output_card.add_class("hp-card")
 
     # wrap: dar ekranda alt alta düşsün; stretch: aynı hizada bitsin
