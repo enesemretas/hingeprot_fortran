@@ -243,6 +243,73 @@ def _leading_int_str(resid: str) -> Optional[str]:
     m = re.match(r"^(-?\d+)", t)
     return m.group(1) if m else None
 
+def read_last_residue_id_from_new(new_path: Path) -> Dict[str, str]:
+    """
+    Kural-4: Son residue etiketi mümkünse .new dosyasından alınır.
+    Dönüş: {chain: last_resid}. Chain bilgisi bulunamazsa {"*": last_resid}.
+    Okuma başarısızsa {} döner.
+    """
+    if not new_path.exists() or new_path.stat().st_size == 0:
+        return {}
+
+    last_by_chain: Dict[str, str] = {}
+
+    def _is_chain_token(x: str) -> bool:
+        return bool(re.fullmatch(r"[A-Za-z0-9]", (x or "").strip()))
+
+    def _looks_like_resid(x: str) -> bool:
+        # en azından başında integer olsun (123, 123A, -1, 45BC vb.)
+        return _leading_int_str((x or "").strip()) is not None
+
+    with new_path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            s = (line or "").strip()
+            if not s:
+                continue
+
+            # 1) PDB-like ise direkt parse et
+            parsed = _parse_pdb_like_chain_resid(s)
+            if parsed:
+                ch, resid = parsed
+                last_by_chain[ch] = resid
+                continue
+
+            parts = s.split()
+            if len(parts) < 2:
+                continue
+
+            # 2) Hinge benzeri: "... <resid> <chain>"
+            if len(parts) >= 3:
+                ch = parts[-1].strip()
+                resid = parts[-2].strip()
+                if _is_chain_token(ch) and _looks_like_resid(resid):
+                    last_by_chain[ch] = resid
+                    continue
+
+            # 3) "<chain> <resid> ..."
+            ch = parts[0].strip()
+            resid = parts[1].strip()
+            if _is_chain_token(ch) and _looks_like_resid(resid):
+                last_by_chain[ch] = resid
+                continue
+
+            # 4) "... <chain> <resid>"
+            ch = parts[-2].strip()
+            resid = parts[-1].strip()
+            if _is_chain_token(ch) and _looks_like_resid(resid):
+                last_by_chain[ch] = resid
+                continue
+
+            # 5) Chain yok ama resid var gibi: son "resid" adayını sakla
+            # (en sonda numeric başlayan bir token bulursak)
+            for tok in reversed(parts):
+                if _looks_like_resid(tok):
+                    last_by_chain["*"] = tok.strip()
+                    break
+
+    return last_by_chain
+
+
 
 def parse_hinge_file(hinge_path: Path) -> Dict[int, Dict[str, List[Tuple[int, str]]]]:
     """
@@ -335,17 +402,20 @@ def build_parts_with_restart_pair_removal(
     min_len: int,
 ) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
     """
-    Kurallar:
-    (2) HER restart döngüsünde önce N-terminus -> ilk hinge mesafesini kontrol et:
-        Eğer ilk hinge baştan < min_len ise, o hinge'i SİL ve restart et.
-    Sonra:
-      - komşu hinge çiftleri arasında gap < min_len olanlar içinden EN KÜÇÜK gap seçilir
-      - o çiftin İKİ hinge'i de kaldırılır
-      - her kaldırmadan sonra baştan taranır (restart)
-
-    (3) Rigid parts aralıkları overlap boundary olacak şekilde yazılır:
-        [0..h1], [h1..h2], ..., [hlast..n-1]
-        Böylece son part: son hinge -> son residue.
+    Kural-1
+      - İlk iki hinge arası mesafe kontrol edilir.
+        * Eğer < min_len ise: ilk iki hinge listeden çıkarılır,
+          aradaki bölge (h1+1 .. h2) Short Flexible Fragments’a eklenir.
+        * Eğer >= min_len ise: ilk hinge’in başlangıçtan uzaklığı kontrol edilir.
+          Başlangıçtan < min_len ise: sadece ilk hinge silinir,
+          Short Flexible Fragments’a (ilk residue .. ilk hinge) eklenir.
+    Kural-2
+      - Sonraki adımlarda: aralarında < min_len residue olan hinge çiftleri bulunur,
+        o çift (iki hinge) listeden çıkarılır ve aradaki bölge (h1+1 .. h2)
+        Short Flexible Fragments’a eklenir. Her işlemden sonra restart edilir.
+    Kural-3
+      - Rigid part’lar overlap yapmaz: bir satır b ile bitiyorsa sonraki satır b+1 ile başlar.
+        Yani: [0..h1], [h1+1..h2], ..., [hlast+1..n-1]
     """
     n = len(residue_list)
     if n == 0:
@@ -354,18 +424,17 @@ def build_parts_with_restart_pair_removal(
     # exact resid -> index
     idx_map_exact = {rid: i for i, rid in enumerate(residue_list)}
 
-    # numeric part -> first index (helps matching when hinge file drops insertion letters)
+    # numeric part -> first index (helps when hinge file drops insertion letters)
     idx_map_num: Dict[str, int] = {}
     for i, rid in enumerate(residue_list):
         num = _leading_int_str(rid)
         if num is not None and num not in idx_map_num:
             idx_map_num[num] = i
 
+    # map hinge entries to positions
     hinges: List[Dict[str, Any]] = []
     for seq_idx, resid in hinge_entries:
         resid = str(resid)
-        # resid token zaten parse_hinge_file içinde trailing-letter temizlenmiş olabilir,
-        # yine de güvenli davranalım:
         resid_clean = _strip_trailing_letters(resid)
 
         if resid_clean in idx_map_exact:
@@ -376,7 +445,7 @@ def build_parts_with_restart_pair_removal(
                 pos = idx_map_num[num]
             else:
                 # fallback: seq_idx (1-based) -> pos (0-based)
-                pos = seq_idx - 1
+                pos = int(seq_idx) - 1
                 if not (0 <= pos < n):
                     continue
 
@@ -388,58 +457,74 @@ def build_parts_with_restart_pair_removal(
         p = int(h["pos"])
         if p not in tmp or int(h["seq"]) < int(tmp[p]["seq"]):
             tmp[p] = h
-    hinges = sorted(tmp.values(), key=lambda x: int(x["seq"]))
+
+    # IMPORTANT: sort by position (residue distance = index difference)
+    hinges = sorted(tmp.values(), key=lambda x: int(x["pos"]))
 
     removed_frags: List[Tuple[int, int]] = []
 
-    def _pick_pair_index(hs: List[Dict[str, Any]]) -> Optional[int]:
-        best_i: Optional[int] = None
-        best_gap: Optional[int] = None
-        for i in range(len(hs) - 1):
-            gap = int(hs[i + 1]["seq"]) - int(hs[i]["seq"])
-            if gap < min_len:
-                if best_gap is None or gap < best_gap:
-                    best_gap = gap
-                    best_i = i
-        return best_i
+    def _gap(i: int, j: int) -> int:
+        return int(hinges[j]["pos"]) - int(hinges[i]["pos"])
 
     # restart loop
     while True:
         if not hinges:
             break
 
-        # (2) first hinge distance from N-terminus (using pos -> actual residue list distance)
-        head_len = int(hinges[0]["pos"]) + 1  # length of [0..first_hinge]
+        # ---------- Kural-1: önce ilk iki hinge arasını kontrol et ----------
+        if len(hinges) >= 2:
+            g12 = _gap(0, 1)
+            if g12 < min_len:
+                h1 = hinges[0]
+                h2 = hinges[1]
+                a = int(h1["pos"]) + 1
+                b = int(h2["pos"])
+                if a <= b:
+                    removed_frags.append((a, b))
+                # remove first two hinges, restart
+                del hinges[1]
+                del hinges[0]
+                continue
+
+        # ---------- Kural-1 (devam): ilk hinge'in başlangıç uzaklığı ----------
+        head_len = int(hinges[0]["pos"]) + 1  # [0..first_hinge] length
         if head_len < min_len:
-            # sadece hinge'i sil, restart et (short-frag olarak raporlamıyoruz)
+            # sadece ilk hinge silinir ve (ilk residue .. ilk hinge) short frag'a eklenir
+            a = 0
+            b = int(hinges[0]["pos"])
+            if a <= b:
+                removed_frags.append((a, b))
             del hinges[0]
             continue
 
+        # ---------- Kural-2: sonraki hinge çiftlerini bul, restart ederek çıkar ----------
         if len(hinges) < 2:
             break
 
-        i = _pick_pair_index(hinges)
-        if i is None:
-            break
+        removed_any = False
+        for i in range(len(hinges) - 1):
+            g = _gap(i, i + 1)
+            if g < min_len:
+                h1 = hinges[i]
+                h2 = hinges[i + 1]
+                a = int(h1["pos"]) + 1
+                b = int(h2["pos"])
+                if a <= b:
+                    removed_frags.append((a, b))
+                # remove the pair, restart
+                del hinges[i + 1]
+                del hinges[i]
+                removed_any = True
+                break
 
-        h1 = hinges[i]
-        h2 = hinges[i + 1]
+        if removed_any:
+            continue
 
-        # short fragment between hinges (exclude first hinge, include second boundary as önceki kod)
-        a = int(h1["pos"]) + 1
-        b = int(h2["pos"])
-        if a <= b:
-            removed_frags.append((a, b))
-
-        # remove both hinges and restart
-        del hinges[i + 1]
-        del hinges[i]
-        # loop continues => head check happens again automatically
+        break  # no more removable pairs
 
     kept_pos = sorted({int(h["pos"]) for h in hinges if 0 <= int(h["pos"]) < n})
 
-    # (3) Build rigid parts with overlap boundaries:
-    # [0..h1], [h1..h2], ..., [hlast..n-1]
+    # ---------- Kural-3: non-overlap rigid parts ----------
     parts: List[Tuple[int, int]] = []
     if not kept_pos:
         parts = [(0, n - 1)]
@@ -448,13 +533,13 @@ def build_parts_with_restart_pair_removal(
         for p in kept_pos:
             if start <= p:
                 parts.append((start, p))
-            start = p  # overlap: next part starts at hinge itself
+            start = p + 1  # NON-OVERLAP: next starts at b+1
         if start <= n - 1:
             parts.append((start, n - 1))
 
-    # keep old merge behavior for reported short fragments
     short_frags = _merge_ranges(removed_frags, n)
     return parts, short_frags
+
 
 
 def rigidparts_report_html(
@@ -463,6 +548,7 @@ def rigidparts_report_html(
     modes: Dict[int, Dict[str, List[Tuple[int, str]]]],
     chains_str: str,
     min_len: int,
+    last_resid_by_chain: Optional[Dict[str, str]] = None,  # NEW (Kural-4)
 ) -> str:
     """HingeProt web’e benzer HTML tablo çıktısı."""
     want = set(list(chains_str)) if chains_str else None
@@ -498,14 +584,25 @@ def rigidparts_report_html(
                 min_len=min_len,
             )
 
-            hinge_res = [residue_list[b] for (a, b) in parts_idx[:-1]] if len(parts_idx) > 1 else []
+            # Kural-4: son residue etiketi override (mümkünse .new'dan)
+            override_last = None
+            if last_resid_by_chain:
+                override_last = last_resid_by_chain.get(ch) or last_resid_by_chain.get("*")
+
+            def _label_at(i: int) -> str:
+                if i == len(residue_list) - 1 and override_last:
+                    return str(override_last)
+                return residue_list[i]
+
+            # Hinge residues: her rigid part'ın (son parça hariç) bitişi hinge olur
+            hinge_res = [_label_at(b) for (a, b) in parts_idx[:-1]] if len(parts_idx) > 1 else []
 
             rows = []
             for i, (a, b) in enumerate(parts_idx, start=1):
                 rows.append(
                     f"<tr>"
                     f"<td style='{_css_cell()}'>{i}</td>"
-                    f"<td style='{_css_cell()}'>{residue_list[a]}-{residue_list[b]}</td>"
+                    f"<td style='{_css_cell()}'>{_label_at(a)}-{_label_at(b)}</td>"
                     f"</tr>"
                 )
 
@@ -513,7 +610,7 @@ def rigidparts_report_html(
             if short_frags:
                 items = []
                 for k, (a, b) in enumerate(short_frags, start=1):
-                    items.append(f"<div style='margin:2px 0;'>{k}. {residue_list[a]}-{residue_list[b]}</div>")
+                    items.append(f"<div style='margin:2px 0;'>{k}. {_label_at(a)}-{_label_at(b)}</div>")
                 short_html = (
                     "<div style='margin-top:10px;color:#dc2626;font-weight:900;'>Short Flexible Fragments:</div>"
                     + "".join(items)
@@ -1423,13 +1520,19 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             # HingeProt server'daki min_len mantığı (processHinges çağrısında da 15 var)
             min_len = 15
 
+            # --- Kural-4: .new dosyasından son residue ID'leri oku (mümkünse) ---
+            new_path = Path(dest_out_dir) / f"{pdb_filename}.new"
+            last_resid_by_chain = read_last_residue_id_from_new(new_path) if new_path.exists() else {}
+
             table_box.value = rigidparts_report_html(
                 pdb_label=pdb_filename,
                 residues_by_chain=residues_by_chain,
                 modes=modes,
                 chains_str=captured["chains_str"],
                 min_len=min_len,
+                last_resid_by_chain=last_resid_by_chain,  # NEW
             )
+
 
             progress.value = 4
             progress.bar_style = "success"
