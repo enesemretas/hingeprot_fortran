@@ -939,90 +939,161 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             return (mn - 1.0, mx + 1.0)
         return (mn, mx)
 
+    def _build_multimodel_pdb_string(pdb_text: str) -> tuple[str, int]:
+        """
+        Her durumda geçerli bir multi-model PDB string'i üretir:
+        MODEL        1
+        ...atoms...
+        ENDMDL
+        MODEL        2
+        ...atoms...
+        ENDMDL
+        Döndürür: (multi_model_string, n_models)
+        """
+        lines = (pdb_text or "").splitlines()
+    
+        # END, MODEL, ENDMDL gibi satırları kontrol ederek model bloklarını çıkar
+        has_model = any(ln.startswith("MODEL") for ln in lines)
+        models: list[list[str]] = []
+    
+        if has_model:
+            cur: list[str] = []
+            in_model = False
+    
+            for ln in lines:
+                if ln.startswith("MODEL"):
+                    # yeni model başlıyor -> önceki bloğu kapat
+                    if cur:
+                        models.append(cur)
+                        cur = []
+                    in_model = True
+                    continue
+    
+                if ln.startswith("ENDMDL"):
+                    # model bitti
+                    models.append(cur)
+                    cur = []
+                    in_model = False
+                    continue
+    
+                if ln.startswith("END"):
+                    continue  # END satırlarını at
+    
+                # model dışında kalan boş/garip satırları çok büyütmeyelim
+                if (not in_model) and (not ln.startswith(("ATOM", "HETATM", "TER", "CONECT"))):
+                    continue
+    
+                cur.append(ln)
+    
+            if cur:
+                models.append(cur)
+    
+        else:
+            # tek modelmiş gibi al; END satırlarını at
+            models = [[ln for ln in lines if not ln.startswith("END")]]
+    
+        # boş modelleri temizle (hiç ATOM/HETATM yoksa at)
+        cleaned: list[list[str]] = []
+        for m in models:
+            if any(ln.startswith(("ATOM", "HETATM")) for ln in m):
+                cleaned.append(m)
+        if cleaned:
+            models = cleaned
+    
+        # multi-model string üret
+        multi = ""
+        for i, m in enumerate(models, start=1):
+            multi += f"MODEL        {i}\n"
+            multi += ("\n".join(m).rstrip() + "\n")
+            multi += "ENDMDL\n"
+    
+        return multi, len(models)
+    
+
     def _make_mode_viewer(mode_pdb_path: str) -> W.Widget:
         """
-        modeX.pdb'i py3Dmol ile gösterir (beta-factor renklendirme).
-        Colab'da script çalışması için W.HTML yerine W.Output + display(HTML(...)) kullanılır.
+        Colab'da en stabil gösterim:
+        - PDB -> multi-model string (MODEL/ENDMDL garantili)
+        - py3Dmol.addModelsAsFrames(...)
+        - HTML'i dosyaya yaz
+        - iframe src="/files/..." ile yükle
         """
         py3Dmol = _ensure_py3dmol()
     
         MODE_W = 560
         MODE_H = 280
     
-        out = W.Output(
-            layout=W.Layout(
-                width=f"{MODE_W}px",
-                height=f"{MODE_H}px",
-                border="1px solid #e5e7eb",
-                border_radius="12px",
-                padding="0px",
-                overflow="hidden",
-            )
+        holder = W.HTML(
+            value="<div style='font-family:Arial;color:#6b7280;'>Rendering 3D view…</div>",
+            layout=W.Layout(width=f"{MODE_W}px", height=f"{MODE_H}px"),
         )
     
-        with out:
-            clear_output(wait=True)
-            try:
-                pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
-                if not pdb_text.strip():
-                    raise RuntimeError("Empty PDB text.")
+        try:
+            pdb_text = Path(mode_pdb_path).read_text(encoding="utf-8", errors="ignore")
+            if not pdb_text.strip():
+                raise RuntimeError("Empty PDB text.")
     
-                # Eğer MODEL var ama ENDMDL yoksa, py3Dmol bazen sorun çıkarabiliyor -> temizle
-                has_model = bool(re.search(r"^MODEL\b", pdb_text, flags=re.M))
-                has_endmdl = bool(re.search(r"^ENDMDL\b", pdb_text, flags=re.M))
-                if has_model and not has_endmdl:
-                    pdb_text = _read_pdb_for_frames(mode_pdb_path)
+            multi_pdb, nmodels = _build_multimodel_pdb_string(pdb_text)
     
-                bmin, bmax = _bfactor_minmax(pdb_text)
+            # bfactor aralığı (multi string üzerinden de olur)
+            bmin, bmax = _bfactor_minmax(multi_pdb)
     
-                # Kaç frame? (MODEL + ENDMDL birlikteyse güvenli)
-                nframes = 0
-                if has_model and has_endmdl:
-                    nframes = len(re.findall(r"^MODEL\b", pdb_text, flags=re.M))
+            view = py3Dmol.view(width=MODE_W, height=MODE_H)
+            view.setBackgroundColor("white")
     
-                v = py3Dmol.view(width=MODE_W, height=MODE_H)
-                v.setBackgroundColor("white")
+            # Kritik satır:
+            view.addModelsAsFrames(multi_pdb, "pdb")
     
-                if nframes >= 2:
-                    v.addModelsAsFrames(pdb_text, "pdb")
-                else:
-                    v.addModel(pdb_text, "pdb")
-    
-                style = {
-                    "cartoon": {
-                        "colorscheme": {
-                            "prop": "b",
-                            "gradient": "roygb",
-                            "min": float(bmin),
-                            "max": float(bmax),
-                        }
+            # B-factor ile renklendir
+            style = {
+                "cartoon": {
+                    "colorscheme": {
+                        "prop": "b",
+                        "gradient": "roygb",
+                        "min": float(bmin),
+                        "max": float(bmax),
                     }
                 }
+            }
+            view.setStyle({}, style)
+            view.zoomTo()
     
-                if nframes >= 2:
-                    for i in range(nframes):
-                        v.setStyle({"model": i}, style)
-                    v.setFrame(0)
-                    v.zoomTo()
-                    v.animate({"loop": "forward", "reps": 0, "interval": 180})
-                else:
-                    v.setStyle({}, style)
-                    v.zoomTo()
+            if nmodels >= 2:
+                view.animate({"loop": "backAndForth", "reps": 0, "interval": 180})
     
-                raw = v._make_html()
-                raw = _html_with_unique_divid(raw)
-                display(HTML(raw))
+            raw = view._make_html()
+            raw = _html_with_unique_divid(raw)
     
-            except Exception as e:
-                display(HTML(
-                    "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
-                    f"Viewer error: {_safe_html(str(e))}"
-                    "</div>"
-                ))
+            # HTML'i dosyaya yaz ve iframe ile yükle
+            out_dir = os.path.dirname(os.path.abspath(mode_pdb_path))
+            html_path = os.path.join(
+                out_dir,
+                f"__hp_view_{Path(mode_pdb_path).stem}_{uuid.uuid4().hex}.html"
+            )
+            Path(html_path).write_text(raw, encoding="utf-8")
     
-        return W.HBox([out], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
+            # Colab /files yalnızca /content altını servis eder. (senin run'lar zaten /content'te)
+            iframe_src = f"/files{html_path}"
+    
+            holder.value = (
+                f"<iframe "
+                f"src='{iframe_src}' "
+                f"sandbox='allow-scripts allow-same-origin' "
+                f"style='width:{MODE_W}px;height:{MODE_H}px;"
+                f"border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;'"
+                f"></iframe>"
+            )
+    
+        except Exception as e:
+            holder.value = (
+                "<div style='font-family:Arial;color:#dc2626;font-weight:800;'>"
+                f"Viewer error: {_safe_html(str(e))}"
+                "</div>"
+            )
+    
+        return W.HBox([holder], layout=W.Layout(width="100%", justify_content="center", align_items="center"))
 
-
+    
     
     # chain colors (deterministic per detected order)
     _CHAIN_PALETTE = [
