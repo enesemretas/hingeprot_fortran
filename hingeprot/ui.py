@@ -2101,15 +2101,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             iframe_id = f"hp_main_if_{uuid.uuid4().hex}"
             state["viewer_iframe_id"] = iframe_id
 
-            doc = _viewer_bootstrap_doc(
-                pdb_b64=state["pdb_b64_view"],
-                ca_only=state["pdb_is_ca_only_view"],
-                w=VIEW_W,
-                h=VIEW_H,
-                iframe_id=iframe_id,
-                init_selected=default_sel,                 # ✅
-                init_cmap=state["chain_colors"],           # ✅                
-            )
 
             # Tek iframe: id veriyoruz ki postMessage ile yakalayabilelim
             b64 = base64.b64encode(doc.encode("utf-8")).decode("ascii")
@@ -2155,6 +2146,17 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 all_chains.value = False
             finally:
                 state["_syncing"] = False
+
+            doc = _viewer_bootstrap_doc(
+                pdb_b64=state["pdb_b64_view"],
+                ca_only=state["pdb_is_ca_only_view"],
+                w=VIEW_W,
+                h=VIEW_H,
+                iframe_id=iframe_id,
+                init_selected=default_sel,                 # ✅
+                init_cmap=state["chain_colors"],           # ✅                
+            )
+
 
             progress.value = 1
             cmap = state.get("chain_colors", {})
