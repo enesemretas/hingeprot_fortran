@@ -95,6 +95,29 @@ def _ensure_repo(fresh: bool = False) -> str:
     return hp
 
 
+def _trim_to_first_model(pdb_text: List[str]) -> List[str]:
+    has_model = any(l.startswith("MODEL") for l in pdb_text)
+    if not has_model:
+        return pdb_text
+    out, in_model, seen_first = [], False, False
+    for L in pdb_text:
+        if L.startswith("MODEL"):
+            if seen_first:
+                break
+            in_model = True
+            seen_first = True
+            continue
+        if L.startswith("ENDMDL") and in_model:
+            break
+        if not in_model:
+            if L.startswith(("ATOM  ", "HETATM", "TER")):
+                out.append(L)
+        else:
+            out.append(L)
+    return out
+
+
+
 def _write_runHingeProt_pl(hingeprot_dir: str, gnm_cut: float, anm_cut: float) -> str:
     gnm_i = int(round(float(gnm_cut)))
     anm_i = int(round(float(anm_cut)))
@@ -889,12 +912,18 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
     def _detect_chains_from_text(pdb_text: str) -> list[str]:
         chains = set()
+        saw_atom = False
         for line in pdb_text.splitlines():
-            if line.startswith(("ATOM  ", "HETATM")) and len(line) > 21:
-                ch = line[21].strip()
-                if ch:
-                    chains.add(ch)
+            if line.startswith(("ATOM  ", "HETATM")):
+                saw_atom = True
+                ch = (line[21].strip() if len(line) > 21 else "")
+                if not ch:
+                    ch = "A"
+                chains.add(ch)
+        if not chains and saw_atom:
+            return ["A"]
         return sorted(chains)
+
 
     def _safe_html(text: str) -> str:
         return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1172,6 +1201,93 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     
         meta = {"serial": serial, "atom": an, "chain": chain, "resSeq": resSeq, "iCode": iCode.strip()}
         return nline, meta
+
+
+    def _sanitize_input_pdb_text(pdb_text: str) -> tuple[str, dict]:
+        """
+        - If multiple MODELs: keep only the first model
+        - Keep atoms with altLoc in {"", "A"} (fixed-width)  [MATLAB keepMainAtom]
+        - Keep only atoms with empty iCode (no insertion code) [MATLAB keepIcode]
+        - If chain ID is blank: set it to 'A' so all atoms are included in calculations
+        Returns: (sanitized_text, stats)
+        """
+        lines = (pdb_text or "").splitlines()
+    
+        stats = {
+            "had_model": any(ln.startswith("MODEL") for ln in lines),
+            "models_count": sum(1 for ln in lines if ln.startswith("MODEL")),
+            "dropped_altloc": 0,
+            "dropped_icode": 0,
+            "filled_blank_chain": 0,
+            "normalized_whitespace_atoms": 0,
+            "kept_atoms": 0,
+        }
+    
+        # 1) First MODEL only
+        lines = _trim_to_first_model(lines)
+    
+        out: list[str] = []
+    
+        for ln in lines:
+            if ln.startswith(("MODEL", "ENDMDL")):
+                continue
+            if ln.startswith("END"):
+                continue
+    
+            if ln.startswith(("ATOM  ", "HETATM")):
+                # Fixed-width case
+                if len(ln) >= 27:
+                    altLoc = ln[16].strip()
+                    iCode  = ln[26].strip()
+    
+                    # MATLAB: keepMainAtom = isempty(altLoc) || altLoc=='A'
+                    if altLoc not in ("", "A"):
+                        stats["dropped_altloc"] += 1
+                        continue
+    
+                    # MATLAB: keepIcode = isempty(iCode)
+                    if iCode != "":
+                        stats["dropped_icode"] += 1
+                        continue
+    
+                    # If chain blank -> set to 'A'
+                    if len(ln) > 21 and ln[21].strip() == "":
+                        ln = ln[:21] + "A" + ln[22:]
+                        stats["filled_blank_chain"] += 1
+    
+                    out.append(ln.rstrip())
+                    stats["kept_atoms"] += 1
+                    continue
+    
+                # Whitespace / non-standard ATOM line -> normalize then apply iCode filter
+                nln, meta = _norm_atom_line_pdb(ln)
+                if meta:
+                    stats["normalized_whitespace_atoms"] += 1
+                    if (meta.get("iCode") or "") != "":
+                        stats["dropped_icode"] += 1
+                        continue
+                    out.append(nln.rstrip())
+                    stats["kept_atoms"] += 1
+                    continue
+    
+                # fallback: keep as-is
+                out.append(ln.rstrip())
+                continue
+    
+            # TER line: optionally fill blank chain too
+            if ln.startswith("TER") and len(ln) > 21 and ln[21].strip() == "":
+                ln = ln[:21] + "A" + ln[22:]
+                stats["filled_blank_chain"] += 1
+                out.append(ln.rstrip())
+                continue
+    
+            # keep other lines
+            out.append(ln.rstrip())
+    
+        sanitized = ("\n".join(out).rstrip() + "\n") if out else ""
+        return sanitized, stats
+
+
     
     
     def _add_conect_for_ca(model_lines: list[str]) -> list[str]:
@@ -2337,7 +2453,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 if state["upload_bytes"] is None:
                     raise ValueError("Please click 'Choose file' and upload a PDB first.")
                 pdb_text = state["upload_bytes"].decode("utf-8", errors="ignore")
-
+                # --- NEW: sanitize (first MODEL, altLoc/iCode cleanup, fill blank chain IDs) ---
+                pdb_text, st = _sanitize_input_pdb_text(pdb_text)
+                
                 upname = (state.get("upload_name") or "upload.pdb").strip()
                 if not re.search(r"\.(pdb|ent)$", upname, flags=re.I):
                     upname = upname + ".pdb"
@@ -2351,6 +2469,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                     raise ValueError("Please enter a PDB code (e.g., 3lzg).")
                 code4 = code.strip().upper()
                 pdb_text = _fetch_pdb_text(code4)
+                # --- NEW: sanitize (first MODEL, altLoc/iCode cleanup, fill blank chain IDs) ---
+                pdb_text, st = _sanitize_input_pdb_text(pdb_text)
+
                 pdb_filename = f"{code4.lower()}.pdb"
                 tag = code4
 
