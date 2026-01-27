@@ -783,6 +783,11 @@ def parse_hinge_file(hinge_path: Path) -> Dict[int, Dict[str, List[Tuple[int, st
 
 # ----------------------------- UI -----------------------------
 def launch(runs_root: str = "/content/hingeprot_runs"):
+
+    import json
+    import time
+    from IPython.display import Javascript
+
     # ---- ENV DETECTION: Colab vs Localhost ----
     IS_COLAB = False
     try:
@@ -943,13 +948,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         )
 
     
-    def _wrap_html_doc(snippet: str) -> str:
-        return (
-            "<!doctype html><html><head><meta charset='utf-8'></head>"
-            "<body style='margin:0;overflow:hidden;'>"
-            f"{snippet}"
-            "</body></html>"
-        )
     
     def _write_html_and_get_iframe(raw_html_doc: str, save_dir: str, w: int, h: int) -> str:
         """
@@ -1111,9 +1109,116 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             return False
     
         return (ca / total) >= ca_frac_thr and other <= max(3, int(0.02 * total))
-    
-    
 
+    def _pdb_for_view(pdb_text: str) -> str:
+        """Viewer payload'ını küçült (run için değil, sadece preview için)."""
+        keep = ("ATOM  ", "HETATM", "TER", "CONECT")
+        lines = [ln for ln in (pdb_text or "").splitlines() if ln.startswith(keep)]
+        return ("\n".join(lines).rstrip() + "\n") if lines else (pdb_text or "")
+    
+    def _viewer_bootstrap_doc(pdb_b64: str, ca_only: bool, w: int, h: int, iframe_id: str) -> str:
+        """
+        1 kez yüklenecek HTML: 3Dmol'u CDN'den yükler, viewer'ı kurar,
+        sonra postMessage ile gelen seçimlere göre style günceller.
+        """
+        return f"""<!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <script src="https://3dmol.csb.pitt.edu/build/3Dmol-min.js"></script>
+    </head>
+    <body style="margin:0;overflow:hidden;">
+      <div id="stage" style="width:{w}px;height:{h}px;"></div>
+    
+      <script>
+        const pdb = atob("{pdb_b64}");
+        const CA_ONLY = {str(bool(ca_only)).lower()};
+        let viewer = null;
+    
+        function applySelection(selected, cmap) {{
+          if (!viewer) return;
+    
+          // reset base
+          if (CA_ONLY) {{
+            viewer.setStyle({{}}, {{ line: {{ color: "lightgray" }} }});
+            viewer.setStyle({{ atom: "CA" }}, {{ sphere: {{ color: "lightgray", scale: 0.25 }} }});
+    
+            for (const ch of (selected || [])) {{
+              const col = (cmap && cmap[ch]) ? cmap[ch] : "red";
+              viewer.setStyle({{ chain: ch }}, {{ line: {{ color: col }} }});
+              viewer.setStyle({{ chain: ch, atom: "CA" }}, {{ sphere: {{ color: col, scale: 0.30 }} }});
+            }}
+          }} else {{
+            viewer.setStyle({{}}, {{ cartoon: {{ color: "lightgray" }} }});
+            for (const ch of (selected || [])) {{
+              const col = (cmap && cmap[ch]) ? cmap[ch] : "red";
+              viewer.setStyle({{ chain: ch }}, {{ cartoon: {{ color: col }} }});
+            }}
+    
+            // Ligandlar (isterseniz hız için kapatın)
+            viewer.setStyle(
+              {{ hetflag: true, not: {{ resn: ["HOH","WAT","DOD"] }} }},
+              {{ stick: {{}}, sphere: {{ scale: 0.25 }} }}
+            );
+          }}
+    
+          viewer.render();
+        }}
+    
+        function init() {
+          viewer = $3Dmol.createViewer("stage", { backgroundColor: "white" });
+          viewer.addModel(pdb, "pdb");
+          applySelection([], {});       // style
+          viewer.zoomTo();              // <-- kritik
+          viewer.render();              // <-- güvenli
+        }
+
+    
+        window.addEventListener("message", (e) => {{
+          // payload: { selected: [...], cmap: {...} }
+          const d = e.data || {{}};
+          if (d && d.__hp_viewer_update__) {{
+            applySelection(d.selected || [], d.cmap || {{}});
+          }}
+        }});
+    
+        init();
+      </script>
+    </body>
+    </html>
+    """
+    
+    def _post_viewer_update(selected: list[str], cmap: dict[str, str]):
+        """
+        Python -> browser: iframe'e postMessage ile seçimi yollar.
+        HTML yeniden üretilmez.
+        """
+        iframe_id = state.get("viewer_iframe_id")
+        if not iframe_id:
+            return
+    
+        payload = json.dumps({
+            "__hp_viewer_update__": True,
+            "selected": selected,
+            "cmap": cmap or {},
+        })
+    
+        js = f"""
+        (function() {{
+          const fr = document.getElementById("{iframe_id}");
+          if (fr && fr.contentWindow) {{
+            fr.contentWindow.postMessage({payload}, "*");
+          }}
+        }})();
+        """
+    
+        if IS_COLAB and colab_output is not None:
+            colab_output.eval_js(js)
+        else:
+            display(Javascript(js))
+    
+        
+    
 
     
         # ---------- NEW: STEP_*_ANMLD.pdb -> trajectory helpers ----------
@@ -1662,6 +1767,17 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             overflow="hidden",
         )
     )
+
+    viewer_html = W.HTML(
+        value="<div style='font-family:Arial;color:#6b7280;'>Load a PDB to preview it here.</div>",
+        layout=W.Layout(width="100%", height=f"{VIEW_H}px"),
+    )
+
+    with viewer_out:
+        clear_output(wait=True)
+        display(viewer_html)
+
+
     viewer_title = W.HTML('<div style="font-weight:800; margin:2px 0 8px 2px;">3D Viewer</div>')
 
     viewer_card = W.VBox(
@@ -1678,11 +1794,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     viewer_card.add_class("hp-card")
 
     def _viewer_placeholder(msg: str = "Load a PDB to preview it here."):
-        with viewer_out:
-            clear_output(wait=True)
-            print(msg)
+        viewer_html.value = f"<div style='font-family:Arial;color:#6b7280;'>{_safe_html(msg)}</div>"
 
-    _viewer_placeholder()
 
     # ---------- state ----------
     state = {
@@ -1702,7 +1815,10 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         "last_out_dir": None,
         "mode_files": {},   # {1: "/path/...mode1.pdb", 2: "/path/...mode2.pdb"}
         "mode_steps_dir": None,  # NEW: STEP_* frame'lerinin aranacağı klasör (dest_out_dir)
-
+        "pdb_text_view": None,         # viewer için sadeleştirilmiş pdb
+        "pdb_b64_view": None,          # viewer için base64
+        "pdb_is_ca_only_view": False,  # CA-only cache
+        "viewer_iframe_id": None,      # iframe DOM id (postMessage için)
     }
     global LAST_UI_STATE
     LAST_UI_STATE = state
@@ -1741,64 +1857,18 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             state["manual_selection"] = tuple(sel)
 
     def _refresh_viewer():
-        if not state.get("pdb_text"):
+        if not state.get("pdb_b64_view"):
             _viewer_placeholder()
             return
 
-        py3Dmol = _ensure_py3dmol()
-        pdb_text = state["pdb_text"]
-
         detected = state.get("detected_chains", [])
         if detected:
-            if all_chains.value:
-                selected = list(detected)
-            else:
-                selected = _selected_chains()
+            selected = list(detected) if all_chains.value else _selected_chains()
         else:
             selected = []
 
-        chain_colors: dict[str, str] = state.get("chain_colors", {}) or {}
-
-        v = py3Dmol.view(width=VIEW_W, height=VIEW_H)
-        v.addModel(pdb_text, "pdb")
-        v.setBackgroundColor("white")
-
-        ca_only = _is_ca_only_pdb(pdb_text)
-        
-        if ca_only:
-            # CA-only: line + CA spheres
-            v.setStyle({}, {"line": {"color": "lightgray"}})
-            v.setStyle({"atom": "CA"}, {"sphere": {"color": "lightgray", "scale": 0.25}})
-        
-            for ch in selected:
-                col = chain_colors.get(ch, "red")
-                v.setStyle({"chain": ch}, {"line": {"color": col}})
-                v.setStyle({"chain": ch, "atom": "CA"}, {"sphere": {"color": col, "scale": 0.30}})
-        else:
-            # Full-atom/backbone present: cartoon
-            v.setStyle({}, {"cartoon": {"color": "lightgray"}})
-            for ch in selected:
-                col = chain_colors.get(ch, "red")
-                v.setStyle({"chain": ch}, {"cartoon": {"color": col}})
-
-
-        # ligands / hetero atoms (exclude waters)
-        # show as sticks+spheres
-        v.setStyle(
-            {"hetflag": True, "not": {"resn": ["HOH", "WAT", "DOD"]}},
-            {"stick": {}, "sphere": {"scale": 0.25}},
-        )
-
-        v.zoomTo()
-
-        raw = _html_with_unique_divid(v._make_html())
-        doc = _wrap_html_doc(raw)
-        iframe_html = _iframe_from_html_doc(doc, VIEW_W, VIEW_H)
-
-        with viewer_out:
-            clear_output(wait=True)
-            display(W.HTML(iframe_html))
-
+        cmap: dict[str, str] = state.get("chain_colors", {}) or {}
+        _post_viewer_update(selected, cmap)
 
 
     # ---------- input visibility ----------
@@ -2026,6 +2096,43 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
             state["run_dir"] = run_dir
             state["pdb_text"] = pdb_text
+            # ---- viewer cache (küçük payload) ----
+            pdb_view = _pdb_for_view(pdb_text)
+            state["pdb_text_view"] = pdb_view
+            state["pdb_b64_view"] = base64.b64encode(pdb_view.encode("utf-8", errors="ignore")).decode("ascii")
+            state["pdb_is_ca_only_view"] = _is_ca_only_pdb(pdb_view)
+
+            # ---- viewer iframe'i 1 kez kur ----
+            iframe_id = f"hp_main_if_{uuid.uuid4().hex}"
+            state["viewer_iframe_id"] = iframe_id
+
+            doc = _viewer_bootstrap_doc(
+                pdb_b64=state["pdb_b64_view"],
+                ca_only=state["pdb_is_ca_only_view"],
+                w=VIEW_W,
+                h=VIEW_H,
+                iframe_id=iframe_id,
+            )
+
+            # Tek iframe: id veriyoruz ki postMessage ile yakalayabilelim
+            b64 = base64.b64encode(doc.encode("utf-8")).decode("ascii")
+            srcdoc = (
+                "<!doctype html><html><head><meta charset='utf-8'></head>"
+                "<body style='margin:0;overflow:hidden;'>"
+                "<script>"
+                f"const html=atob('{b64}');"
+                "document.open();document.write(html);document.close();"
+                "</script>"
+                "</body></html>"
+            )
+
+            viewer_html.value = (
+                f"<iframe id='{iframe_id}' srcdoc=\"{srcdoc.replace('\"','&quot;')}\" "
+                f"sandbox='allow-scripts allow-same-origin' "
+                f"style='width:{VIEW_W}px;height:{VIEW_H}px;border:1px solid #e5e7eb;"
+                f"border-radius:12px;overflow:hidden;'></iframe>"
+            )
+
             state["pdb_filename"] = pdb_filename
             state["pdb_tag"] = tag
 
@@ -2255,6 +2362,11 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         state["hingeprot_dir"] = None
         state["last_out_dir"] = None
         state["mode_steps_dir"] = None
+        state["pdb_text_view"] = None
+        state["pdb_b64_view"] = None
+        state["pdb_is_ca_only_view"] = False
+        state["viewer_iframe_id"] = None
+        _viewer_placeholder()
 
         state["detected_chains"] = []
         state["chain_cbs"] = {}
