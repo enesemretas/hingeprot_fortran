@@ -1166,7 +1166,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         }}
     
         function init() {
-          viewer = $3Dmol.createViewer("stage", { backgroundColor: "white" });
+          viewer = $3Dmol.createViewer("stage", {{ backgroundColor: "white" }});
           viewer.addModel(pdb, "pdb");
           applySelection([], {});       // style
           viewer.zoomTo();              // <-- kritik
