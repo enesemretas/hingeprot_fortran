@@ -2435,12 +2435,24 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         )
     )
 
-    # Bu kart output içinde tek bir viewer alanı olacak
+
+    # Alt kontrol satırı (Mode 1/2 + Download) -> viewer'ın altına ve ortalı
+    mode_controls_row = W.HBox(
+        [mode_select, mode_dl],
+        layout=W.Layout(
+            width="100%",
+            justify_content="center",
+            align_items="center",
+            gap="10px",
+        ),
+    )
+    
+    # Bu kart output içinde tek bir viewer alanı olacak (kontroller altta)
     mode_viewer_card = W.VBox(
         [
             mode_title,
-            W.HBox([mode_select, mode_dl], layout=W.Layout(gap="10px", align_items="center")),
             mode_view_container,
+            mode_controls_row,
         ],
         layout=W.Layout(width="100%", gap="8px"),
     )
