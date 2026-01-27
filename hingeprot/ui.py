@@ -1486,20 +1486,35 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             ca_only = _is_ca_only_pdb(multi_pdb)
             
             if ca_only:
+                # 1) Tüm CA'lara temel stil (sphere = B-factor gradient, line = default)
                 view.setStyle(
                     {"atom": "CA"},
                     {
-                        "line": {"color": "lightgray", "linewidth": 2},
                         "sphere": {
                             "scale": 0.30,
-                            "colorscheme": {"prop": "b", "gradient": "roygb", "min": float(bmin), "max": float(bmax)},
+                            "colorscheme": {
+                                "prop": "b",
+                                "gradient": "roygb",
+                                "min": float(bmin),
+                                "max": float(bmax),
+                            },
                         },
+                        "line": {"color": "lightgray", "linewidth": 2},
                     },
                 )
+            
+                # 2) Chain bazlı line rengi (bağlantılar chain rengi)
+                cmap = state.get("chain_colors", {}) or {}
+                chs = _detect_chains_from_text(multi_pdb)
+                for ch in chs:
+                    col = cmap.get(ch, "lightgray")
+                    view.setStyle({"chain": ch, "atom": "CA"}, {"line": {"color": col, "linewidth": 2}})
+            
             else:
                 view.setStyle(
                     {},
-                    {"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb", "min": float(bmin), "max": float(bmax)}}},
+                    {"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb",
+                                                 "min": float(bmin), "max": float(bmax)}}}
                 )
 
 
@@ -1555,13 +1570,22 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 ca_only = _is_ca_only_pdb(multi_pdb)
             
                 if ca_only:
+                    # 1) temel stil
                     v.setStyle(
                         {"atom": "CA"},
                         {
-                            "line": {"color": "lightgray", "linewidth": 2},
                             "sphere": {"color": "lightgray", "scale": 0.26},
+                            "line": {"color": "lightgray", "linewidth": 2},
                         },
                     )
+                
+                    # 2) chain bazlı line rengi
+                    cmap = state.get("chain_colors", {}) or {}
+                    chs = _detect_chains_from_text(multi_pdb)
+                    for ch in chs:
+                        col = cmap.get(ch, "lightgray")
+                        v.setStyle({"chain": ch, "atom": "CA"}, {"line": {"color": col, "linewidth": 2}})
+                
                 else:
                     v.setStyle({}, {"cartoon": {"color": "spectrum"}})
 
