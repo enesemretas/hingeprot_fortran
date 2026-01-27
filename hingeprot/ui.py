@@ -1109,7 +1109,12 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         lines = [ln for ln in (pdb_text or "").splitlines() if ln.startswith(keep)]
         return ("\n".join(lines).rstrip() + "\n") if lines else (pdb_text or "")
     
-    def _viewer_bootstrap_doc(pdb_b64: str, ca_only: bool, w: int, h: int, iframe_id: str) -> str:
+    def _viewer_bootstrap_doc(pdb_b64: str, ca_only: bool, w: int, h: int, iframe_id: str,
+                              init_selected: list[str] | None = None,
+                              init_cmap: dict[str, str] | None = None) -> str:
+        init_selected_js = json.dumps(init_selected or [])
+        init_cmap_js     = json.dumps(init_cmap or {})
+    
         return f"""<!doctype html>
     <html>
     <head>
@@ -1122,6 +1127,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       <script>
         const pdb = atob("{pdb_b64}");
         const CA_ONLY = {str(bool(ca_only)).lower()};
+        const INIT_SELECTED = {init_selected_js};
+        const INIT_CMAP = {init_cmap_js};
         let viewer = null;
     
         function applySelection(selected, cmap) {{
@@ -1153,11 +1160,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         }}
     
         function init() {{
-          viewer = $3Dmol.createViewer("stage", {{ backgroundColor: "white" }}); // <-- BURASI ÖNEMLİ
+          viewer = $3Dmol.createViewer("stage", {{ backgroundColor: "white" }});
           viewer.addModel(pdb, "pdb");
-          applySelection([], {{}});
-          viewer.zoomTo();
-          viewer.render();
+    
+          // 🔥 İlk açılışta seçimi uygula
+          applySelection(INIT_SELECTED, INIT_CMAP);
+    
+          // bazı ortamlarda render timing için 1 kez daha
+          setTimeout(() => applySelection(INIT_SELECTED, INIT_CMAP), 50);
         }}
     
         window.addEventListener("message", (e) => {{
@@ -2097,6 +2107,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 w=VIEW_W,
                 h=VIEW_H,
                 iframe_id=iframe_id,
+                init_selected=default_sel,                 # ✅
+                init_cmap=state["chain_colors"],           # ✅                
             )
 
             # Tek iframe: id veriyoruz ki postMessage ile yakalayabilelim
