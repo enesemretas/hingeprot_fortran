@@ -916,7 +916,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     def _wrap_html_doc(snippet: str) -> str:
         """py3Dmol HTML snippet'ini tam bir HTML dokümanına sarar."""
         return (
-            "<!doctype html><html><head><meta charset='utf-8'></head>"
+            "<!doctype html><html><head><meta charset='utf-8'>"
+            "<style>html,body{margin:0;padding:0;overflow:hidden;height:100%;width:100%;}</style>"
+            "</head>"
             "<body style='margin:0;overflow:hidden;'>"
             f"{snippet}"
             "</body></html>"
@@ -931,7 +933,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
         # srcdoc attribute'u dışarıda tek tırnakla kullanıldığı için içeride tek tırnak kullanmıyoruz.
         srcdoc = (
-            "<!doctype html><html><head><meta charset=\"utf-8\"></head>"
+            "<!doctype html><html><head><meta charset=\"utf-8\">"
+            "<style>html,body{margin:0;padding:0;overflow:hidden;height:100%;width:100%;}</style>"
+            "</head>"
             "<body style=\"margin:0;overflow:hidden;\">"
             "<script>"
             f"const html=atob(\"{b64}\");"
@@ -1277,7 +1281,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         """
         py3Dmol = _ensure_py3dmol()
 
-        MODE_W = 560
+        MODE_W = 558
         MODE_H = 280
 
         holder = W.HTML(
@@ -1746,7 +1750,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     INNER_W = CARD_W - 2 * CARD_PAD
 
     # IMPORTANT: avoid horizontal scrollbar by making py3Dmol slightly smaller than inner area
-    VIEW_W = INNER_W - 2 * (OUT_PAD + OUT_BORDER)
+    VIEW_W = INNER_W - 2 * (OUT_PAD + OUT_BORDER) - 2
     VIEW_H = 280
 
     viewer_out = W.Output(
@@ -2121,8 +2125,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             viewer_html.value = (
                 f"<iframe id='{iframe_id}' srcdoc=\"{srcdoc.replace('\"','&quot;')}\" "
                 f"sandbox='allow-scripts allow-same-origin' "
-                f"style='width:{VIEW_W}px;height:{VIEW_H}px;border:1px solid #e5e7eb;"
-                f"border-radius:12px;overflow:hidden;'></iframe>"
+                f"style='width:{VIEW_W}px;height:{VIEW_H}px;border:0;"
+                f"border-radius:12px;overflow:hidden;display:block;'></iframe>"
             )
 
             state["pdb_filename"] = pdb_filename
@@ -2457,7 +2461,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     def _mode_placeholder(msg: str = "Run HingeProt to generate mode files."):
         with mode_view_container:
             clear_output(wait=True)
-            print(msg)
+            display(HTML(f"<div style='font-family:Arial;color:#6b7280;overflow:hidden;'>{_safe_html(msg)}</div>"))
 
     _mode_placeholder()
 
