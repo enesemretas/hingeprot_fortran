@@ -2962,7 +2962,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     
       <p><b>Protein Chain:</b> the user can enter a PDB code or upload his/her own PDB format file. If the input structure includes more than one chain, the user will be requested to select one of the chains in the next step. The server employs coarse grained residue model and thus only reads Ca atom coordinates from the PDB file, so the input file may include only Ca atoms. Missing residues in the input PDB file, are neglected in the calculations and the results are oriented according to available parts.</p>
     
-      <p><b>E-mail address (optional):</b> since the calculations may take up to a few minutes for long proteins, it is recommended to enter e-mail address as an input. Once the calculations are finished, the link to the results will be sent to this e-mail. The results will be kept in the server for 2 months.The results page, if bookmarked, can be reached during this period.</p>
+      <p><b>E-mail address (optional):</b> since the calculations may take up to a few minutes for long proteins, it is recommended to enter e-mail address as an input. Once the calculations are finished, the link to the results will be sent to this e-mail.</p>
     
       <p>Currently HingeProt focuses on single chain of a protein. The largest number of residues allowed is 999. For a more detailed help on the theoretical background of the work see the About page.</p>
     
@@ -2981,7 +2981,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       <!-- FIGURE: inserted right after the sentence above -->
       <div style="margin:12px 0 18px 0; text-align:center;">
         <img src="{img_example}" alt="HingeProt example output"
-             style="max-width:100%; width:min(980px, 100%); height:auto;
+             style="max-width:50%; width:min(980px, 50%); height:auto;
                     border:1px solid #e5e7eb; border-radius:14px;"/>
       </div>
     
