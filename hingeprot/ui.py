@@ -1206,9 +1206,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     def _sanitize_input_pdb_text(pdb_text: str) -> tuple[str, dict]:
         """
         - If multiple MODELs: keep only the first model
-        - Keep atoms with altLoc in {"", "A"} (fixed-width)  [MATLAB keepMainAtom]
-        - Keep only atoms with empty iCode (no insertion code) [MATLAB keepIcode]
-        - If chain ID is blank: set it to 'A' so all atoms are included in calculations
+        - DO NOT drop altLoc (B/C/...) or insertion codes (iCode) anymore
+        - If chain ID is blank: set it to 'A' so atoms are included in calculations
         Returns: (sanitized_text, stats)
         """
         lines = (pdb_text or "").splitlines()
@@ -1216,18 +1215,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         stats = {
             "had_model": any(ln.startswith("MODEL") for ln in lines),
             "models_count": sum(1 for ln in lines if ln.startswith("MODEL")),
-            "dropped_altloc": 0,
-            "dropped_icode": 0,
             "filled_blank_chain": 0,
-            "normalized_whitespace_atoms": 0,
-            "kept_atoms": 0,
+            "kept_atomhet": 0,
         }
     
         # 1) First MODEL only
         lines = _trim_to_first_model(lines)
     
         out: list[str] = []
-    
         for ln in lines:
             if ln.startswith(("MODEL", "ENDMDL")):
                 continue
@@ -1235,57 +1230,28 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 continue
     
             if ln.startswith(("ATOM  ", "HETATM")):
-                # Fixed-width case
-                if len(ln) >= 27:
-                    altLoc = ln[16].strip()
-                    iCode  = ln[26].strip()
+                # Fixed-width: fill blank chain in col 22 (index 21)
+                if len(ln) > 21 and ln[21].strip() == "":
+                    ln = ln[:21] + "A" + ln[22:]
+                    stats["filled_blank_chain"] += 1
     
-                    # MATLAB: keepMainAtom = isempty(altLoc) || altLoc=='A'
-                    if altLoc not in ("", "A"):
-                        stats["dropped_altloc"] += 1
-                        continue
+                out.append(ln.rstrip())
+                stats["kept_atomhet"] += 1
+                continue
     
-                    # MATLAB: keepIcode = isempty(iCode)
-                    if iCode != "":
-                        stats["dropped_icode"] += 1
-                        continue
-    
-                    # If chain blank -> set to 'A'
-                    if len(ln) > 21 and ln[21].strip() == "":
-                        ln = ln[:21] + "A" + ln[22:]
-                        stats["filled_blank_chain"] += 1
-    
-                    out.append(ln.rstrip())
-                    stats["kept_atoms"] += 1
-                    continue
-    
-                # Whitespace / non-standard ATOM line -> normalize then apply iCode filter
-                nln, meta = _norm_atom_line_pdb(ln)
-                if meta:
-                    stats["normalized_whitespace_atoms"] += 1
-                    if (meta.get("iCode") or "") != "":
-                        stats["dropped_icode"] += 1
-                        continue
-                    out.append(nln.rstrip())
-                    stats["kept_atoms"] += 1
-                    continue
-    
-                # fallback: keep as-is
+            if ln.startswith("TER"):
+                if len(ln) > 21 and ln[21].strip() == "":
+                    ln = ln[:21] + "A" + ln[22:]
+                    stats["filled_blank_chain"] += 1
                 out.append(ln.rstrip())
                 continue
     
-            # TER line: optionally fill blank chain too
-            if ln.startswith("TER") and len(ln) > 21 and ln[21].strip() == "":
-                ln = ln[:21] + "A" + ln[22:]
-                stats["filled_blank_chain"] += 1
-                out.append(ln.rstrip())
-                continue
-    
-            # keep other lines
+            # keep everything else as-is
             out.append(ln.rstrip())
     
         sanitized = ("\n".join(out).rstrip() + "\n") if out else ""
         return sanitized, stats
+
 
 
     
