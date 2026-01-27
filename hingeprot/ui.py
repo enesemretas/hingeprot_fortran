@@ -925,17 +925,10 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         )
 
     def _iframe_from_html_doc(doc_html: str, w: int, h: int) -> str:
-        """
-        /files veya data: kullanmadan iframe içinde HTML'i çalıştırır.
-        (srcdoc + base64 => localhost problemlerini bitirir)
-        """
         b64 = base64.b64encode(doc_html.encode("utf-8")).decode("ascii")
-
-        # srcdoc attribute'u dışarıda tek tırnakla kullanıldığı için içeride tek tırnak kullanmıyoruz.
+    
         srcdoc = (
-            "<!doctype html><html><head><meta charset=\"utf-8\">"
-            "<style>html,body{margin:0;padding:0;overflow:hidden;height:100%;width:100%;}</style>"
-            "</head>"
+            "<!doctype html><html><head><meta charset=\"utf-8\"></head>"
             "<body style=\"margin:0;overflow:hidden;\">"
             "<script>"
             f"const html=atob(\"{b64}\");"
@@ -943,15 +936,13 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             "</script>"
             "</body></html>"
         )
-
+    
         return (
             f"<iframe srcdoc='{srcdoc}' "
             f"sandbox='allow-scripts allow-same-origin' "
-            f"style='width:{w}px;height:{h}px;border:1px solid #e5e7eb;"
-            f"border-radius:12px;overflow:hidden;'></iframe>"
+            f"style='width:100%;height:100%;border:0;display:block;overflow:hidden;border-radius:12px;'></iframe>"
         )
-
-    
+        
     
     def _write_html_and_get_iframe(raw_html_doc: str, save_dir: str, w: int, h: int) -> str:
         """
@@ -986,10 +977,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         return (
             f"<iframe src='{src}' "
             f"sandbox='allow-scripts allow-same-origin' "
-            f"style='width:{w}px;height:{h}px;border:1px solid #e5e7eb;"
-            f"border-radius:12px;overflow:hidden;'></iframe>"
+            f"style='width:100%;height:100%;border:0;display:block;overflow:hidden;border-radius:12px;'></iframe>"
         )
-
     
 
     def _read_pdb_for_frames(path: str) -> str:
@@ -1759,7 +1748,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             height=f"{VIEW_H}px",
             border="1px solid #e5e7eb",
             border_radius="12px",
-            padding=f"{OUT_PAD}px",
+            padding="0px",
             overflow="hidden",
         )
     )
@@ -2125,9 +2114,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             viewer_html.value = (
                 f"<iframe id='{iframe_id}' srcdoc=\"{srcdoc.replace('\"','&quot;')}\" "
                 f"sandbox='allow-scripts allow-same-origin' "
-                f"style='width:{VIEW_W}px;height:{VIEW_H}px;border:0;"
-                f"border-radius:12px;overflow:hidden;display:block;'></iframe>"
+                f"style='width:100%;height:100%;border:0;display:block;overflow:hidden;border-radius:12px;'></iframe>"
             )
+
 
             state["pdb_filename"] = pdb_filename
             state["pdb_tag"] = tag
@@ -2441,7 +2430,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             height="320px",
             border="1px solid #e5e7eb",
             border_radius="12px",
-            padding="6px",
+            padding="0px",
             overflow="hidden",
         )
     )
