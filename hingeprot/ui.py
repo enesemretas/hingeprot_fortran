@@ -1011,21 +1011,145 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             return (mn - 1.0, mx + 1.0)
         return (mn, mx)
 
+    _RES_RE = re.compile(r"^(-?\d+)([A-Za-z]?)$")
+    
+    _AA3 = {
+        "ALA","ARG","ASN","ASP","CYS","GLN","GLU","GLY","HIS","ILE",
+        "LEU","LYS","MET","PHE","PRO","SER","THR","TRP","TYR","VAL"
+    }
+    
+    def _norm_atom_line_pdb(ln: str):
+        """
+        Whitespace PDB satırını fixed-width PDB'ye normalize eder.
+        Döner: (normalized_line, meta_dict|None)
+        meta_dict: serial, atom, chain, resSeq, iCode
+        """
+        parts = (ln or "").split()
+        if len(parts) < 9:
+            return ln.rstrip(), None
+    
+        rec = parts[0].upper()
+        if rec not in ("ATOM", "HETATM"):
+            return ln.rstrip(), None
+    
+        try:
+            serial = int(float(parts[1]))
+        except Exception:
+            serial = 1
+    
+        atom = parts[2].strip()
+        resn = parts[3].strip().upper()[:3]
+        chain = (parts[4].strip()[:1] if len(parts) > 4 and parts[4].strip() else "A")
+        resid_raw = (parts[5].strip() if len(parts) > 5 else "1")
+    
+        m = _RES_RE.match(resid_raw)
+        if m:
+            resSeq = int(m.group(1))
+            iCode = (m.group(2) or " ")
+        else:
+            m2 = re.match(r"^(-?\d+)", resid_raw)
+            resSeq = int(m2.group(1)) if m2 else 1
+            iCode = " "
+    
+        try:
+            x = float(parts[6]); y = float(parts[7]); z = float(parts[8])
+        except Exception:
+            return ln.rstrip(), None
+    
+        occ = 1.00
+        b   = 0.00
+        if len(parts) > 9:
+            try: occ = float(parts[9])
+            except Exception: pass
+        if len(parts) > 10:
+            try: b = float(parts[10])
+            except Exception: pass
+    
+        # Atom name PDB hizalama (CA -> " CA ")
+        an = atom.upper()
+        if len(atom) == 4:
+            atom4 = atom
+        elif len(atom) == 3:
+            atom4 = f" {atom}"
+        elif len(atom) == 2:
+            atom4 = f" {atom} "
+        elif len(atom) == 1:
+            atom4 = f" {atom}  "
+        else:
+            atom4 = atom[:4]
+    
+        # Element: protein CA için "C" yap (Calcium değil)
+        if an == "CA" and resn in _AA3:
+            elem = "C"
+        else:
+            elem = re.sub(r"[^A-Za-z]", "", an)[:2].upper() or (an[:1].upper() if an else "C")
+    
+        altLoc = " "
+        # PDB fixed-width
+        nline = (
+            f"{rec:<6}{serial:>5d} {atom4:4s}{altLoc:1}{resn:>3s} "
+            f"{chain:1}{resSeq:>4d}{iCode:1}   "
+            f"{x:>8.3f}{y:>8.3f}{z:>8.3f}"
+            f"{occ:>6.2f}{b:>6.2f}          {elem:>2s}"
+        )
+    
+        meta = {"serial": serial, "atom": an, "chain": chain, "resSeq": resSeq, "iCode": iCode.strip()}
+        return nline, meta
+    
+    
+    def _add_conect_for_ca(model_lines: list[str]) -> list[str]:
+        """
+        Model içindeki CA atomlarını (chain+resSeq'e göre) sıralayıp
+        ardışık CA'lar arasında CONECT ekler.
+        """
+        if any(ln.startswith("CONECT") for ln in model_lines):
+            return model_lines  # zaten var
+    
+        ca = []
+        for ln in model_lines:
+            if not ln.startswith(("ATOM", "HETATM")):
+                continue
+            if len(ln) < 27:
+                continue
+            atomname = ln[12:16].strip().upper()
+            if atomname != "CA":
+                continue
+            try:
+                serial = int(ln[6:11])
+            except Exception:
+                continue
+            chain = ln[21].strip() or "A"
+            try:
+                resSeq = int(ln[22:26].strip())
+            except Exception:
+                resSeq = 0
+            iCode = ln[26].strip() or ""
+            ca.append((chain, resSeq, iCode, serial))
+    
+        if len(ca) < 2:
+            return model_lines
+    
+        by_chain = {}
+        for ch, rs, ic, ser in ca:
+            by_chain.setdefault(ch, []).append((rs, ic, ser))
+    
+        conect = []
+        for ch, arr in by_chain.items():
+            arr.sort(key=lambda t: (t[0], t[1]))
+            for (_, _, s1), (_, _, s2) in zip(arr, arr[1:]):
+                conect.append(f"CONECT{s1:>5d}{s2:>5d}")
+    
+        return model_lines + conect
+    
+    
     def _build_multimodel_pdb_string(pdb_text: str) -> tuple[str, int]:
         """
-        Her durumda geçerli bir multi-model PDB string'i üretir:
-        MODEL        1
-        ...atoms...
-        ENDMDL
-        MODEL        2
-        ...atoms...
-        ENDMDL
-        Döndürür: (multi_model_string, n_models)
+        Her durumda geçerli bir multi-model PDB string'i üretir ve
+        her modelde CA-CA bağlantıları için CONECT ekler.
         """
         lines = (pdb_text or "").splitlines()
-    
-        # END, MODEL, ENDMDL gibi satırları kontrol ederek model bloklarını çıkar
         has_model = any(ln.startswith("MODEL") for ln in lines)
+    
         models: list[list[str]] = []
     
         if has_model:
@@ -1034,7 +1158,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     
             for ln in lines:
                 if ln.startswith("MODEL"):
-                    # yeni model başlıyor -> önceki bloğu kapat
                     if cur:
                         models.append(cur)
                         cur = []
@@ -1042,16 +1165,15 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                     continue
     
                 if ln.startswith("ENDMDL"):
-                    # model bitti
                     models.append(cur)
                     cur = []
                     in_model = False
                     continue
     
                 if ln.startswith("END"):
-                    continue  # END satırlarını at
+                    continue
     
-                # model dışında kalan boş/garip satırları çok büyütmeyelim
+                # modeli toplarken sadece faydalı satırları tut
                 if (not in_model) and (not ln.startswith(("ATOM", "HETATM", "TER", "CONECT"))):
                     continue
     
@@ -1059,12 +1181,10 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     
             if cur:
                 models.append(cur)
-    
         else:
-            # tek modelmiş gibi al; END satırlarını at
             models = [[ln for ln in lines if not ln.startswith("END")]]
     
-        # boş modelleri temizle (hiç ATOM/HETATM yoksa at)
+        # boş modelleri at
         cleaned: list[list[str]] = []
         for m in models:
             if any(ln.startswith(("ATOM", "HETATM")) for ln in m):
@@ -1072,14 +1192,29 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         if cleaned:
             models = cleaned
     
+        # normalize + CONECT ekle
+        norm_models: list[list[str]] = []
+        for m in models:
+            norm_lines: list[str] = []
+            for ln in m:
+                if ln.startswith(("ATOM", "HETATM")):
+                    nln, _meta = _norm_atom_line_pdb(ln)
+                    norm_lines.append(nln)
+                elif ln.startswith("TER"):
+                    norm_lines.append(ln.rstrip())
+                # CONECT'i şimdilik atlayalım; zaten yeniden üretiyoruz
+            norm_lines = _add_conect_for_ca(norm_lines)
+            norm_models.append(norm_lines)
+    
         # multi-model string üret
         multi = ""
-        for i, m in enumerate(models, start=1):
+        for i, m in enumerate(norm_models, start=1):
             multi += f"MODEL        {i}\n"
             multi += ("\n".join(m).rstrip() + "\n")
             multi += "ENDMDL\n"
     
-        return multi, len(models)
+        return multi, len(norm_models)
+
 
     def _is_ca_only_pdb(pdb_text: str, min_atoms: int = 30, ca_frac_thr: float = 0.90) -> bool:
         total = 0
@@ -1351,35 +1486,20 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             ca_only = _is_ca_only_pdb(multi_pdb)
             
             if ca_only:
-                # TEK setStyle: trace + sphere (2. setStyle trace'i ezmesin)
                 view.setStyle(
                     {"atom": "CA"},
                     {
-                        "trace": {
-                            "colorscheme": {
-                                "prop": "b",
-                                "gradient": "roygb",
-                                "min": float(bmin),
-                                "max": float(bmax),
-                            },
-                            "thickness": 0.5,   # istersen 0.7 yap
-                        },
+                        "line": {"color": "lightgray", "linewidth": 2},
                         "sphere": {
                             "scale": 0.30,
-                            "colorscheme": {
-                                "prop": "b",
-                                "gradient": "roygb",
-                                "min": float(bmin),
-                                "max": float(bmax),
-                            },
+                            "colorscheme": {"prop": "b", "gradient": "roygb", "min": float(bmin), "max": float(bmax)},
                         },
                     },
                 )
             else:
                 view.setStyle(
                     {},
-                    {"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb",
-                                                 "min": float(bmin), "max": float(bmax)}}}
+                    {"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb", "min": float(bmin), "max": float(bmax)}}},
                 )
 
 
@@ -1433,18 +1553,17 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 v.addModelsAsFrames(multi_pdb, "pdb")
                 
                 ca_only = _is_ca_only_pdb(multi_pdb)
+            
                 if ca_only:
-                    # TEK setStyle: trace + sphere (sphere trace'i ezmesin)
                     v.setStyle(
                         {"atom": "CA"},
                         {
-                            "trace": {"color": "lightgray", "thickness": 0.5},  # 0.7 de deneyebilirsin
+                            "line": {"color": "lightgray", "linewidth": 2},
                             "sphere": {"color": "lightgray", "scale": 0.26},
                         },
                     )
                 else:
                     v.setStyle({}, {"cartoon": {"color": "spectrum"}})
-
 
                 
                 v.zoomTo()
