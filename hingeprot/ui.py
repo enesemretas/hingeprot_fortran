@@ -299,6 +299,73 @@ def _resnum_int(resid: str) -> int | None:
     except Exception:
         return None
 
+def _filter_degenerate_ranges_rigidparts(residues_str: str) -> str:
+    """
+    SADECE rigid parts 'Residues' alanı için:
+    Başlangıç ve bitiş residue numarası aynı olan aralıkları (örn. 45-45, 45A-45B) çıkarır.
+    Örnek: "A:45-45,46-60" -> "A:46-60"
+    Eğer geriye hiç parça kalmazsa "" döner (row tamamen atlanabilir).
+    """
+    s = (residues_str or "").strip()
+    if not s:
+        return ""
+
+    # "A: 46-55" gibi boşlukları normalize et -> "A:46-55"
+    s = re.sub(r"([A-Za-z])\s*:\s*", r"\1:", s)
+
+    # Önce virgülle, sonra whitespace ile tokenize et (formatlar değişken olabiliyor)
+    tokens: list[str] = []
+    for chunk in re.split(r"\s*,\s*", s):
+        tokens.extend([t for t in chunk.split() if t])
+
+    current_chain: str | None = None
+    need_prefix_on_next = False  # chain prefix'li token silinirse bir sonraki kept token'a prefix bas
+
+    kept: list[str] = []
+
+    # range:  -1-45 , 268--1 , 45A-45B vb.
+    range_re = re.compile(r"^(-?\d+[A-Za-z]?)\s*-\s*(-?\d+[A-Za-z]?)$")
+
+    for tok in tokens:
+        tok = tok.strip()
+        if not tok:
+            continue
+
+        has_prefix = False
+        body = tok
+
+        m = re.match(r"^([A-Za-z]):(.*)$", tok)
+        if m:
+            current_chain = m.group(1)
+            body = (m.group(2) or "").strip()
+            has_prefix = True
+            need_prefix_on_next = True  # bu chain bloğunun ilk token'ı; silinirse sonraki token'a prefix taşınmalı
+
+        if not body:
+            # boş kaldıysa (ör: "A:" gibi) skip ama prefix taşınsın
+            continue
+
+        # degenerate range kontrolü (baş=son)
+        mr = range_re.match(body)
+        if mr:
+            a, b = mr.group(1), mr.group(2)
+            ai = _resnum_int(a)
+            bi = _resnum_int(b)
+            if ai is not None and bi is not None and ai == bi:
+                # Bu aralığı ATLA (tabloya alma)
+                # Eğer bu token'da prefix vardıysa veya prefix taşınacaksa, need_prefix_on_next True kalsın
+                continue
+
+        # token tutulacak -> prefix basılacak mı?
+        prefix = ""
+        if (has_prefix or need_prefix_on_next) and current_chain:
+            prefix = f"{current_chain}:"
+            need_prefix_on_next = False
+
+        kept.append(prefix + body)
+
+    return ", ".join(kept).strip()
+
 
 def _fmt_resid_with_chain(resid: object, ch: str) -> str:
     s = str(resid).strip()
@@ -521,12 +588,17 @@ def rigidparts_report_html_from_report(
         parts = list(report[mode].get("parts", []) or [])
         rows = []
         for pno, residues_str in parts:
+            residues_str2 = _filter_degenerate_ranges_rigidparts(residues_str)
+            if not residues_str2:
+                continue  # geriye bir şey kalmadıysa bu row'u gösterme
+        
             rows.append(
                 f"<tr>"
                 f"<td style='{_css_cell()}'>{pno}</td>"
-                f"<td style='{_css_cell()}'>{residues_str}</td>"
+                f"<td style='{_css_cell()}'>{residues_str2}</td>"
                 f"</tr>"
             )
+
 
         hinge_tokens = list(report[mode].get("hinge_tokens", []) or [])
         hinge_line = " ".join(hinge_tokens) if hinge_tokens else "-"
@@ -615,12 +687,17 @@ def rigidparts_report_widget_from_report(
         parts = list(report[mode].get("parts", []) or [])
         rows = []
         for pno, residues_str in parts:
+            residues_str2 = _filter_degenerate_ranges_rigidparts(residues_str)
+            if not residues_str2:
+                continue
+        
             rows.append(
                 f"<tr>"
                 f"<td style='{_css_cell()}'>{pno}</td>"
-                f"<td style='{_css_cell()}'>{residues_str}</td>"
+                f"<td style='{_css_cell()}'>{residues_str2}</td>"
                 f"</tr>"
             )
+
 
         hinge_tokens = list(report[mode].get("hinge_tokens", []) or [])
         hinge_line = " ".join(hinge_tokens) if hinge_tokens else "-"
