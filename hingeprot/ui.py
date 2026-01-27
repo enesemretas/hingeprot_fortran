@@ -974,58 +974,28 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             opts = sorted(set(opts + [default_value]))
         else:
             opts = sorted(set(opts))
-    
-        # --- UI sizing (uniform) ---
-        H = "36px"
-        LABEL_W = "150px"
-        TOGGLE_W = "200px"
-    
-        lbl = W.Label(label, layout=W.Layout(width=LABEL_W))
-    
+
+        lbl = W.Label(label, layout=W.Layout(width="120px"))
         toggle = W.ToggleButtons(
             options=[("List", "list"), ("Custom", "custom")],
             value="list",
-            layout=W.Layout(width=TOGGLE_W, height=H),
-            style={"button_width": "90px"},
+            layout=W.Layout(width="180px"),
+            style={"button_width": "80px"},
         )
-    
-        dropdown = W.Dropdown(
-            options=opts,
-            value=default_value,
-            layout=W.Layout(width="100%", height=H),
-        )
-        fbox = W.BoundedFloatText(
-            value=default_value,
-            min=minv,
-            max=maxv,
-            step=0.1,
-            layout=W.Layout(width="100%", height=H),
-        )
-    
-        value_box = W.Box(
-            [dropdown],
-            layout=W.Layout(
-                flex="1 1 0",
-                width="auto",
-                min_width="0px",
-                align_items="center",
-            ),
-        )
-    
+        dropdown = W.Dropdown(options=opts, value=default_value, layout=W.Layout(width="240px"))
+        fbox = W.BoundedFloatText(value=default_value, min=minv, max=maxv, step=0.1, layout=W.Layout(width="240px"))
+        value_box = W.Box([dropdown], layout=W.Layout(align_items="center"))
+
         def _on_toggle(ch):
             value_box.children = [dropdown] if ch["new"] == "list" else [fbox]
-    
+
         toggle.observe(_on_toggle, names="value")
-    
+
         def get_value() -> float:
             return float(dropdown.value) if toggle.value == "list" else float(fbox.value)
-    
-        row = W.HBox(
-            [lbl, toggle, value_box],
-            layout=W.Layout(width="100%", align_items="center", gap="12px"),
-        )
-        return row, get_value
 
+        row = W.HBox([lbl, toggle, value_box], layout=W.Layout(align_items="center", gap="12px"))
+        return row, get_value
 
     def _ensure_py3dmol():
         try:
@@ -2000,34 +1970,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     }
 
 
-    /* ---------- NEW: uniform widget look (inputs/buttons/toggles) ---------- */
-    .hp-card .widget-text input,
-    .hp-card .widget-dropdown select,
-    .hp-card .widget-boundedfloattext input,
-    .hp-card .widget-floattext input,
-    .hp-card .widget-inttext input,
-    .hp-card .widget-boundedinttext input {
-      height: 36px !important;
-      border-radius: 12px !important;
-    }
-    
-    .hp-card .widget-button button,
-    .hp-card .widget-togglebuttons button {
-      height: 36px !important;
-      border-radius: 12px !important;
-      font-weight: 800 !important;
-    }
-    
-    .hp-card .widget-togglebuttons .btn {
-      border-radius: 12px !important;
-    }
-    
-    .hp-card .widget-hbox, .hp-card .widget-vbox {
-      box-sizing: border-box;
-    }
-
-
-
     </style>
     """)
 
@@ -2807,61 +2749,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     btn_load.on_click(on_load_clicked)
     btn_run_fortran.on_click(on_run_fortran_clicked)
     btn_clear.on_click(on_clear_clicked)
-
-
-    # ---------- NEW: uniform sizing pass (make boxes consistent) ----------
-    _H = "36px"
-    _W_FULL = "100%"
-    
-    def _flex(w, f="1 1 0"):
-        w.layout.flex = f
-        w.layout.min_width = "0px"
-        w.layout.width = "auto"
-    
-    # Full-width key controls
-    for w in (input_row, code_box, upload_box, btn_load, chain_row, gnm_row, anm_row, progress):
-        w.layout.width = _W_FULL
-    
-    # Text / toggles heights
-    pdb_code.layout.width  = _W_FULL
-    pdb_code.layout.height = _H
-    
-    input_mode.layout.width  = _W_FULL
-    input_mode.layout.height = _H
-    
-    btn_load.layout.width  = _W_FULL
-    btn_load.layout.height = _H
-    
-    progress.layout.width = _W_FULL
-    
-    # Upload row: fixed parts + flexible label
-    btn_choose_file.layout.width  = "160px"
-    btn_choose_file.layout.height = _H
-    
-    file_upload.layout.width  = "260px"
-    file_upload.layout.height = _H
-    
-    upload_prog.layout.width  = "160px"
-    upload_prog.layout.height = "18px"   # progress bar daha ince dursun
-    
-    _flex(file_lbl, "1 1 auto")          # label kalan alanı doldursun
-    
-    # Chain wrap: biraz daha “kutumsu” ve sabit yükseklik hissi
-    chains_wrap.layout.min_height = "44px"
-    
-    # Run/Clear: aynı satırda eşit ve esneyen butonlar
-    btn_run_fortran.layout.height = _H
-    btn_clear.layout.height       = _H
-    _flex(btn_run_fortran, "2 1 0")  # Run biraz daha geniş
-    _flex(btn_clear, "1 1 0")
-    
-    # Mode viewer controls: eşit genişlikte dursun
-    mode_select.layout.height = _H
-    mode_dl.layout.height     = _H
-    _flex(mode_select, "1 1 0")
-    _flex(mode_dl, "1 1 0")
-
-
 
     # --------- CARDS (same width) ---------
     form_card = W.VBox(
