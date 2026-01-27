@@ -1404,22 +1404,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         lines = [ln for ln in (pdb_text or "").splitlines() if ln.startswith(keep)]
         return ("\n".join(lines).rstrip() + "\n") if lines else (pdb_text or "")
     
-    def _viewer_bootstrap_doc(
-        pdb_b64: str,
-        ca_only: bool,
-        w: int,
-        h: int,
-        iframe_id: str,
-        default_selected: list[str] | None = None,
-        default_cmap: dict[str, str] | None = None,
-    ) -> str:
-        default_selected = default_selected or []
-        default_cmap = default_cmap or {}
-    
-        # JSON string olarak JS içine gömeceğiz
-        _def_sel = json.dumps(default_selected)
-        _def_cmap = json.dumps(default_cmap)
-    
+    def _viewer_bootstrap_doc(pdb_b64: str, ca_only: bool, w: int, h: int, iframe_id: str) -> str:
         return f"""<!doctype html>
     <html>
     <head>
@@ -1432,50 +1417,52 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       <script>
         const pdb = atob("{pdb_b64}");
         const CA_ONLY = {str(bool(ca_only)).lower()};
-        const DEFAULT_SELECTED = {_def_sel};
-        const DEFAULT_CMAP = {_def_cmap};
-    
         let viewer = null;
     
         function applySelection(selected, cmap) {{
           if (!viewer) return;
-    
+        
           if (CA_ONLY) {{
+            // Reset styles + remove previously drawn backbone cylinders
             viewer.setStyle({{}}, {{}});
             viewer.removeAllShapes();
-    
+        
             const selSet = new Set((selected || []).map((x) => String(x)));
             const model = viewer.getModel();
-    
+        
+            // Grab all CA atoms and group by chain
             const atoms = model.selectedAtoms({{ atom: "CA" }});
             const byChain = {{}};
-    
+        
             for (const a of atoms) {{
               const ch = (a.chain || "").trim();
               if (!ch) continue;
               if (!byChain[ch]) byChain[ch] = [];
               byChain[ch].push(a);
             }}
-    
+        
+            // Draw cylinders between consecutive CA atoms (per chain)
             for (const ch in byChain) {{
               const arr = byChain[ch];
-    
+        
+              // Keep file order (serial/index) to avoid weird jumps
               arr.sort((a, b) => {{
                 const sa = (a.serial ?? a.index ?? 0);
                 const sb = (b.serial ?? b.index ?? 0);
                 return sa - sb;
               }});
-    
+        
               const col = selSet.has(ch) ? ((cmap && cmap[ch]) ? cmap[ch] : "red") : "lightgray";
-    
+        
               for (let i = 0; i < arr.length - 1; i++) {{
                 const a = arr[i];
                 const b = arr[i + 1];
-    
+        
+                // Optional: skip large residue gaps (prevents long "teleport" bonds)
                 const ra = parseInt(a.resi);
                 const rb = parseInt(b.resi);
                 if (!Number.isNaN(ra) && !Number.isNaN(rb) && Math.abs(rb - ra) > 1) continue;
-    
+        
                 viewer.addCylinder({{
                   start: {{ x: a.x, y: a.y, z: a.z }},
                   end:   {{ x: b.x, y: b.y, z: b.z }},
@@ -1486,12 +1473,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 }});
               }}
             }}
-    
+        
+            // CA spheres (grey base)
             viewer.setStyle(
               {{ atom: "CA" }},
               {{ sphere: {{ color: "lightgray", scale: 0.25 }} }}
             );
-    
+        
+            // Selected chains: colored CA spheres (and cylinders already colored above)
             for (const ch of (selected || [])) {{
               const col = (cmap && cmap[ch]) ? cmap[ch] : "red";
               viewer.setStyle(
@@ -1505,26 +1494,22 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
               const col = (cmap && cmap[ch]) ? cmap[ch] : "red";
               viewer.setStyle({{ chain: ch }}, {{ cartoon: {{ color: col }} }});
             }}
-    
+        
             viewer.setStyle(
               {{ hetflag: true, not: {{ resn: ["HOH","WAT","DOD"] }} }},
               {{ stick: {{}}, sphere: {{ scale: 0.25 }} }}
             );
           }}
-    
+        
           viewer.render();
         }}
+
     
         function init() {{
-          viewer = $3Dmol.createViewer("stage", {{ backgroundColor: "white" }});
+          viewer = $3Dmol.createViewer("stage", {{ backgroundColor: "white" }}); // <-- BURASI ÖNEMLİ
           viewer.addModel(pdb, "pdb");
-    
-          // ✅ İlk açılışta default chain(ler) renkli gelsin
-          applySelection(DEFAULT_SELECTED, DEFAULT_CMAP);
-    
-          // ❌ Zoom yapma
-          // viewer.zoomTo();
-    
+          applySelection([], {{}});
+          viewer.zoomTo();
           viewer.render();
         }}
     
@@ -1540,7 +1525,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     </body>
     </html>
     """
-
 
     def _post_viewer_update(selected: list[str], cmap: dict[str, str]):
         """
@@ -2463,7 +2447,41 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
             state["run_dir"] = run_dir
             state["pdb_text"] = pdb_text
+            # ---- viewer cache (küçük payload) ----
+            pdb_view = _pdb_for_view(pdb_text)
+            state["pdb_text_view"] = pdb_view
+            state["pdb_b64_view"] = base64.b64encode(pdb_view.encode("utf-8", errors="ignore")).decode("ascii")
+            state["pdb_is_ca_only_view"] = _is_ca_only_pdb(pdb_view)
 
+            # ---- viewer iframe'i 1 kez kur ----
+            iframe_id = f"hp_main_if_{uuid.uuid4().hex}"
+            state["viewer_iframe_id"] = iframe_id
+
+            doc = _viewer_bootstrap_doc(
+                pdb_b64=state["pdb_b64_view"],
+                ca_only=state["pdb_is_ca_only_view"],
+                w=VIEW_W,
+                h=VIEW_H,
+                iframe_id=iframe_id,
+            )
+
+            # Tek iframe: id veriyoruz ki postMessage ile yakalayabilelim
+            b64 = base64.b64encode(doc.encode("utf-8")).decode("ascii")
+            srcdoc = (
+                "<!doctype html><html><head><meta charset='utf-8'></head>"
+                "<body style='margin:0;overflow:hidden;'>"
+                "<script>"
+                f"const html=atob('{b64}');"
+                "document.open();document.write(html);document.close();"
+                "</script>"
+                "</body></html>"
+            )
+
+            viewer_html.value = (
+                f"<iframe id='{iframe_id}' srcdoc=\"{srcdoc.replace('\"','&quot;')}\" "
+                f"sandbox='allow-scripts allow-same-origin' "
+                f"style='width:100%;height:100%;border:0;display:block;overflow:hidden;border-radius:12px;'></iframe>"
+            )
 
 
             state["pdb_filename"] = pdb_filename
@@ -2491,48 +2509,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 all_chains.value = False
             finally:
                 state["_syncing"] = False
-
-            # ---- viewer cache (küçük payload) ----
-            pdb_view = _pdb_for_view(pdb_text)
-            state["pdb_text_view"] = pdb_view
-            state["pdb_b64_view"] = base64.b64encode(pdb_view.encode("utf-8", errors="ignore")).decode("ascii")
-            state["pdb_is_ca_only_view"] = _is_ca_only_pdb(pdb_view)
-
-            # ---- viewer iframe'i 1 kez kur ----
-            iframe_id = f"hp_main_if_{uuid.uuid4().hex}"
-            state["viewer_iframe_id"] = iframe_id
-
-            doc = _viewer_bootstrap_doc(
-                pdb_b64=state["pdb_b64_view"],
-                ca_only=state["pdb_is_ca_only_view"],
-                w=VIEW_W,
-                h=VIEW_H,
-                iframe_id=iframe_id,
-                default_selected=default_sel,                # ✅ ilk chain seçili gelsin
-                default_cmap=state.get("chain_colors", {}),  # ✅ aynı palette ile renklensin
-            )
-
-            # Tek iframe: id veriyoruz ki postMessage ile yakalayabilelim
-            b64 = base64.b64encode(doc.encode("utf-8")).decode("ascii")
-            srcdoc = (
-                "<!doctype html><html><head><meta charset='utf-8'></head>"
-                "<body style='margin:0;overflow:hidden;'>"
-                "<script>"
-                f"const html=atob('{b64}');"
-                "document.open();document.write(html);document.close();"
-                "</script>"
-                "</body></html>"
-            )
-
-            viewer_html.value = (
-                f"<iframe id='{iframe_id}' srcdoc=\"{srcdoc.replace('\"','&quot;')}\" "
-                f"sandbox='allow-scripts allow-same-origin' "
-                f"style='width:100%;height:100%;border:0;display:block;overflow:hidden;border-radius:12px;'></iframe>"
-            )
-
-
-
-
 
             progress.value = 1
             cmap = state.get("chain_colors", {})
