@@ -914,15 +914,16 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         chains = set()
         saw_atom = False
         for line in pdb_text.splitlines():
-            if line.startswith(("ATOM  ", "HETATM")):
+            if line.startswith(("ATOM  ", "HETATM")) and len(line) > 21:
                 saw_atom = True
-                ch = (line[21].strip() if len(line) > 21 else "")
+                ch = line[21].strip()
                 if not ch:
-                    ch = "A"
+                    ch = "0"
                 chains.add(ch)
         if not chains and saw_atom:
-            return ["A"]
+            return ["0"]
         return sorted(chains)
+
 
 
     def _safe_html(text: str) -> str:
@@ -1145,7 +1146,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     
         atom = parts[2].strip()
         resn = parts[3].strip().upper()[:3]
-        chain = (parts[4].strip()[:1] if len(parts) > 4 and parts[4].strip() else "A")
+        chain = (parts[4].strip()[:1] if len(parts) > 4 and parts[4].strip() else "0")
         resid_raw = (parts[5].strip() if len(parts) > 5 else "1")
     
         m = _RES_RE.match(resid_raw)
@@ -1232,7 +1233,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             if ln.startswith(("ATOM  ", "HETATM")):
                 # Fixed-width: fill blank chain in col 22 (index 21)
                 if len(ln) > 21 and ln[21].strip() == "":
-                    ln = ln[:21] + "A" + ln[22:]
+                    ln = ln[:21] + "0" + ln[22:]
                     stats["filled_blank_chain"] += 1
     
                 out.append(ln.rstrip())
@@ -1241,7 +1242,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     
             if ln.startswith("TER"):
                 if len(ln) > 21 and ln[21].strip() == "":
-                    ln = ln[:21] + "A" + ln[22:]
+                    ln = ln[:21] + "0" + ln[22:]
                     stats["filled_blank_chain"] += 1
                 out.append(ln.rstrip())
                 continue
@@ -1277,7 +1278,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 serial = int(ln[6:11])
             except Exception:
                 continue
-            chain = ln[21].strip() or "A"
+            chain = ln[21].strip() or "0"
             try:
                 resSeq = int(ln[22:26].strip())
             except Exception:
