@@ -57,30 +57,18 @@ The UI also includes an automated step to install `libg2c.so.0` on Debian/Ubuntu
 
 ---
 
-🧠 Notes & limitations
+## 🧠 Notes & limitations
 
-Single-chain focus (original HingeProt behavior): the classic server/pipeline is designed primarily around single-chain analysis, although this UI allows selecting multiple chains.
-
-CA-only inputs: supported and recommended for coarse-grained ENM workflows.
-
-Missing residues: neglected in calculations; results reflect available coordinates.
-
-Residue limit: HingeProt traditionally limits residue count (commonly cited as 999).
+- Single-chain focus (original HingeProt behavior): the classic server/pipeline is designed primarily around single-chain analysis, although this UI allows selecting multiple chains.
+- CA-only inputs: supported and recommended for coarse-grained ENM workflows.
+- Missing residues: neglected in calculations; results reflect available coordinates.
+- Residue limit: HingeProt traditionally limits residue count (commonly cited as 999).
 
 
-📌 Citation
+## 📌 Citation
 
 If you use this work, please cite the original HingeProt paper:
 
 Emekli U, Schneidman-Duhovny D, Wolfson HJ, Nussinov R, Haliloglu T. (2008) HingeProt: Automated Prediction of Hinges in Protein Structures. Proteins, 70(4):1219–1227.
 
-@article{Emekli2008HingeProt,
-  title={HingeProt: Automated Prediction of Hinges in Protein Structures},
-  author={Emekli, U. and Schneidman-Duhovny, D. and Wolfson, H. J. and Nussinov, R. and Haliloglu, T.},
-  journal={Proteins},
-  volume={70},
-  number={4},
-  pages={1219--1227},
-  year={2008}
-}
 
