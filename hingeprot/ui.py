@@ -1128,19 +1128,73 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
           if (!viewer) return;
         
           if (CA_ONLY) {{
-            // Default: all chains as lightgray trace + CA spheres
-            viewer.setStyle({{}}, {{ trace: {{ color: "lightgray", radius: 0.20 }} }});
-            viewer.setStyle({{ atom: "CA" }}, {{ sphere: {{ color: "lightgray", scale: 0.25 }} }});
+            // Reset styles + remove previously drawn backbone cylinders
+            viewer.setStyle({{}}, {{}});
+            viewer.removeAllShapes();
         
-            // Selected chains colored
+            const selSet = new Set((selected || []).map((x) => String(x)));
+            const model = viewer.getModel();
+        
+            // Grab all CA atoms and group by chain
+            const atoms = model.selectedAtoms({{ atom: "CA" }});
+            const byChain = {{}};
+        
+            for (const a of atoms) {{
+              const ch = (a.chain || "").trim();
+              if (!ch) continue;
+              if (!byChain[ch]) byChain[ch] = [];
+              byChain[ch].push(a);
+            }}
+        
+            // Draw cylinders between consecutive CA atoms (per chain)
+            for (const ch in byChain) {{
+              const arr = byChain[ch];
+        
+              // Keep file order (serial/index) to avoid weird jumps
+              arr.sort((a, b) => {{
+                const sa = (a.serial ?? a.index ?? 0);
+                const sb = (b.serial ?? b.index ?? 0);
+                return sa - sb;
+              }});
+        
+              const col = selSet.has(ch) ? ((cmap && cmap[ch]) ? cmap[ch] : "red") : "lightgray";
+        
+              for (let i = 0; i < arr.length - 1; i++) {{
+                const a = arr[i];
+                const b = arr[i + 1];
+        
+                // Optional: skip large residue gaps (prevents long "teleport" bonds)
+                const ra = parseInt(a.resi);
+                const rb = parseInt(b.resi);
+                if (!Number.isNaN(ra) && !Number.isNaN(rb) && Math.abs(rb - ra) > 1) continue;
+        
+                viewer.addCylinder({{
+                  start: {{ x: a.x, y: a.y, z: a.z }},
+                  end:   {{ x: b.x, y: b.y, z: b.z }},
+                  radius: 0.12,
+                  color: col,
+                  fromCap: 1,
+                  toCap: 1
+                }});
+              }}
+            }}
+        
+            // CA spheres (grey base)
+            viewer.setStyle(
+              {{ atom: "CA" }},
+              {{ sphere: {{ color: "lightgray", scale: 0.25 }} }}
+            );
+        
+            // Selected chains: colored CA spheres (and cylinders already colored above)
             for (const ch of (selected || [])) {{
               const col = (cmap && cmap[ch]) ? cmap[ch] : "red";
-              viewer.setStyle({{ chain: ch }}, {{ trace: {{ color: col, radius: 0.28 }} }});
-              viewer.setStyle({{ chain: ch, atom: "CA" }}, {{ sphere: {{ color: col, scale: 0.30 }} }});
+              viewer.setStyle(
+                {{ chain: ch, atom: "CA" }},
+                {{ sphere: {{ color: col, scale: 0.30 }} }}
+              );
             }}
           }} else {{
             viewer.setStyle({{}}, {{ cartoon: {{ color: "lightgray" }} }});
-        
             for (const ch of (selected || [])) {{
               const col = (cmap && cmap[ch]) ? cmap[ch] : "red";
               viewer.setStyle({{ chain: ch }}, {{ cartoon: {{ color: col }} }});
