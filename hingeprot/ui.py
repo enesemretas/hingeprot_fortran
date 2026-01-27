@@ -1351,19 +1351,29 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             ca_only = _is_ca_only_pdb(multi_pdb)
             
             if ca_only:
-                # CA-only için bond gerektirmeyen backbone çizimi (animasyonda da görünür)
-                view.setStyle(
-                    {},
-                    {"trace": {"colorscheme": {"prop": "b", "gradient": "roygb",
-                                               "min": float(bmin), "max": float(bmax)},
-                               "thickness": 0.25}}
-                )
-                # İstersen CA noktaları da kalsın
+                # TEK setStyle: trace + sphere (2. setStyle trace'i ezmesin)
                 view.setStyle(
                     {"atom": "CA"},
-                    {"sphere": {"scale": 0.28,
-                                "colorscheme": {"prop": "b", "gradient": "roygb",
-                                                "min": float(bmin), "max": float(bmax)}}}
+                    {
+                        "trace": {
+                            "colorscheme": {
+                                "prop": "b",
+                                "gradient": "roygb",
+                                "min": float(bmin),
+                                "max": float(bmax),
+                            },
+                            "thickness": 0.5,   # istersen 0.7 yap
+                        },
+                        "sphere": {
+                            "scale": 0.30,
+                            "colorscheme": {
+                                "prop": "b",
+                                "gradient": "roygb",
+                                "min": float(bmin),
+                                "max": float(bmax),
+                            },
+                        },
+                    },
                 )
             else:
                 view.setStyle(
@@ -1371,6 +1381,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                     {"cartoon": {"colorscheme": {"prop": "b", "gradient": "roygb",
                                                  "min": float(bmin), "max": float(bmax)}}}
                 )
+
 
             view.zoomTo()
 
@@ -1423,9 +1434,14 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 
                 ca_only = _is_ca_only_pdb(multi_pdb)
                 if ca_only:
-                    # STEP framelerinde CA-only backbone: trace (bond istemez, animasyonda çalışır)
-                    v.setStyle({}, {"trace": {"color": "lightgray", "thickness": 0.25}})
-                    v.setStyle({"atom": "CA"}, {"sphere": {"color": "lightgray", "scale": 0.26}})
+                    # TEK setStyle: trace + sphere (sphere trace'i ezmesin)
+                    v.setStyle(
+                        {"atom": "CA"},
+                        {
+                            "trace": {"color": "lightgray", "thickness": 0.5},  # 0.7 de deneyebilirsin
+                            "sphere": {"color": "lightgray", "scale": 0.26},
+                        },
+                    )
                 else:
                     v.setStyle({}, {"cartoon": {"color": "spectrum"}})
 
