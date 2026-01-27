@@ -1351,10 +1351,17 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             ca_only = _is_ca_only_pdb(multi_pdb)
             
             if ca_only:
-                view.setStyle({}, {"line": {"color": "lightgray"}})
+                # CA-only için bond gerektirmeyen backbone çizimi (animasyonda da görünür)
+                view.setStyle(
+                    {},
+                    {"trace": {"colorscheme": {"prop": "b", "gradient": "roygb",
+                                               "min": float(bmin), "max": float(bmax)},
+                               "thickness": 0.25}}
+                )
+                # İstersen CA noktaları da kalsın
                 view.setStyle(
                     {"atom": "CA"},
-                    {"sphere": {"scale": 0.35,
+                    {"sphere": {"scale": 0.28,
                                 "colorscheme": {"prop": "b", "gradient": "roygb",
                                                 "min": float(bmin), "max": float(bmax)}}}
                 )
@@ -1416,8 +1423,9 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 
                 ca_only = _is_ca_only_pdb(multi_pdb)
                 if ca_only:
-                    v.setStyle({}, {"line": {"color": "lightgray"}})
-                    v.setStyle({"atom": "CA"}, {"sphere": {"scale": 0.30}})
+                    # STEP framelerinde CA-only backbone: trace (bond istemez, animasyonda çalışır)
+                    v.setStyle({}, {"trace": {"color": "lightgray", "thickness": 0.25}})
+                    v.setStyle({"atom": "CA"}, {"sphere": {"color": "lightgray", "scale": 0.26}})
                 else:
                     v.setStyle({}, {"cartoon": {"color": "spectrum"}})
 
