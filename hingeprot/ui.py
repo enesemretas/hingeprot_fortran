@@ -1126,31 +1126,35 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     
         function applySelection(selected, cmap) {{
           if (!viewer) return;
-    
+        
           if (CA_ONLY) {{
-            viewer.setStyle({{}}, {{ line: {{ color: "lightgray" }} }});
+            // Default: all chains as lightgray trace + CA spheres
+            viewer.setStyle({{}}, {{ trace: {{ color: "lightgray", radius: 0.20 }} }});
             viewer.setStyle({{ atom: "CA" }}, {{ sphere: {{ color: "lightgray", scale: 0.25 }} }});
-    
+        
+            // Selected chains colored
             for (const ch of (selected || [])) {{
               const col = (cmap && cmap[ch]) ? cmap[ch] : "red";
-              viewer.setStyle({{ chain: ch }}, {{ line: {{ color: col }} }});
+              viewer.setStyle({{ chain: ch }}, {{ trace: {{ color: col, radius: 0.28 }} }});
               viewer.setStyle({{ chain: ch, atom: "CA" }}, {{ sphere: {{ color: col, scale: 0.30 }} }});
             }}
           }} else {{
             viewer.setStyle({{}}, {{ cartoon: {{ color: "lightgray" }} }});
+        
             for (const ch of (selected || [])) {{
               const col = (cmap && cmap[ch]) ? cmap[ch] : "red";
               viewer.setStyle({{ chain: ch }}, {{ cartoon: {{ color: col }} }});
             }}
-    
+        
             viewer.setStyle(
               {{ hetflag: true, not: {{ resn: ["HOH","WAT","DOD"] }} }},
               {{ stick: {{}}, sphere: {{ scale: 0.25 }} }}
             );
           }}
-    
+        
           viewer.render();
         }}
+
     
         function init() {{
           viewer = $3Dmol.createViewer("stage", {{ backgroundColor: "white" }}); // <-- BURASI ÖNEMLİ
