@@ -1117,10 +1117,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         return ("\n".join(lines).rstrip() + "\n") if lines else (pdb_text or "")
     
     def _viewer_bootstrap_doc(pdb_b64: str, ca_only: bool, w: int, h: int, iframe_id: str) -> str:
-        """
-        1 kez yüklenecek HTML: 3Dmol'u CDN'den yükler, viewer'ı kurar,
-        sonra postMessage ile gelen seçimlere göre style günceller.
-        """
         return f"""<!doctype html>
     <html>
     <head>
@@ -1138,7 +1134,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         function applySelection(selected, cmap) {{
           if (!viewer) return;
     
-          // reset base
           if (CA_ONLY) {{
             viewer.setStyle({{}}, {{ line: {{ color: "lightgray" }} }});
             viewer.setStyle({{ atom: "CA" }}, {{ sphere: {{ color: "lightgray", scale: 0.25 }} }});
@@ -1155,7 +1150,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
               viewer.setStyle({{ chain: ch }}, {{ cartoon: {{ color: col }} }});
             }}
     
-            // Ligandlar (isterseniz hız için kapatın)
             viewer.setStyle(
               {{ hetflag: true, not: {{ resn: ["HOH","WAT","DOD"] }} }},
               {{ stick: {{}}, sphere: {{ scale: 0.25 }} }}
@@ -1165,17 +1159,15 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
           viewer.render();
         }}
     
-        function init() {
-          viewer = $3Dmol.createViewer("stage", {{ backgroundColor: "white" }});
+        function init() {{
+          viewer = $3Dmol.createViewer("stage", {{ backgroundColor: "white" }}); // <-- BURASI ÖNEMLİ
           viewer.addModel(pdb, "pdb");
-          applySelection([], {});       // style
-          viewer.zoomTo();              // <-- kritik
-          viewer.render();              // <-- güvenli
-        }
-
+          applySelection([], {{}});
+          viewer.zoomTo();
+          viewer.render();
+        }}
     
         window.addEventListener("message", (e) => {{
-          // payload: { selected: [...], cmap: {...} }
           const d = e.data || {{}};
           if (d && d.__hp_viewer_update__) {{
             applySelection(d.selected || [], d.cmap || {{}});
@@ -1187,7 +1179,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     </body>
     </html>
     """
-    
+
     def _post_viewer_update(selected: list[str], cmap: dict[str, str]):
         """
         Python -> browser: iframe'e postMessage ile seçimi yollar.
