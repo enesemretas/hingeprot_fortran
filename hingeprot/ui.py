@@ -1486,12 +1486,13 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             ca_only = _is_ca_only_pdb(multi_pdb)
             
             if ca_only:
-                # 1) Tüm CA'lara temel stil (sphere = B-factor gradient, line = default)
+                # CA sphere: B-factor colorscheme
+                # CA line:   B-factor colorscheme (same as sphere)
                 view.setStyle(
                     {"atom": "CA"},
                     {
                         "sphere": {
-                            "scale": 0.30,
+                            "scale": 0.35,
                             "colorscheme": {
                                 "prop": "b",
                                 "gradient": "roygb",
@@ -1499,9 +1500,18 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                                 "max": float(bmax),
                             },
                         },
-                        "line": {"color": "lightgray", "linewidth": 2},
+                        "line": {
+                            "colorscheme": {
+                                "prop": "b",
+                                "gradient": "roygb",
+                                "min": float(bmin),
+                                "max": float(bmax),
+                            },
+                            "linewidth": 2,
+                        },
                     },
                 )
+
             
                 # 2) Chain bazlı line rengi (bağlantılar chain rengi)
                 cmap = state.get("chain_colors", {}) or {}
@@ -1561,7 +1571,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             # STEP frameleri gerçekten varsa onları kullan
             if len(step_files) >= 2:
                 multi_pdb, nmodels = _concat_steps_as_models(step_files)
-
+                bmin, bmax = _bfactor_minmax(multi_pdb)
+                
                 v = py3Dmol.view(width=MODE_W, height=MODE_H)
                 v.setBackgroundColor("white")
 
@@ -1570,25 +1581,43 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 ca_only = _is_ca_only_pdb(multi_pdb)
             
                 if ca_only:
-                    # 1) temel stil
                     v.setStyle(
                         {"atom": "CA"},
                         {
-                            "sphere": {"color": "lightgray", "scale": 0.26},
-                            "line": {"color": "lightgray", "linewidth": 2},
+                            "sphere": {
+                                "scale": 0.30,
+                                "colorscheme": {
+                                    "prop": "b",
+                                    "gradient": "roygb",
+                                    "min": float(bmin),
+                                    "max": float(bmax),
+                                },
+                            },
+                            "line": {
+                                "colorscheme": {
+                                    "prop": "b",
+                                    "gradient": "roygb",
+                                    "min": float(bmin),
+                                    "max": float(bmax),
+                                },
+                                "linewidth": 2,
+                            },
                         },
                     )
-                
-                    # 2) chain bazlı line rengi
-                    cmap = state.get("chain_colors", {}) or {}
-                    chs = _detect_chains_from_text(multi_pdb)
-                    for ch in chs:
-                        col = cmap.get(ch, "lightgray")
-                        v.setStyle({"chain": ch, "atom": "CA"}, {"line": {"color": col, "linewidth": 2}})
-                
                 else:
-                    v.setStyle({}, {"cartoon": {"color": "spectrum"}})
-
+                    v.setStyle(
+                        {},
+                        {
+                            "cartoon": {
+                                "colorscheme": {
+                                    "prop": "b",
+                                    "gradient": "roygb",
+                                    "min": float(bmin),
+                                    "max": float(bmax),
+                                }
+                            }
+                        },
+                    )
                 
                 v.zoomTo()
                 v.animate({"loop": "backAndForth", "reps": 0, "interval": 180})
