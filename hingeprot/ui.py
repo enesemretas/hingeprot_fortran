@@ -2811,6 +2811,8 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     # Use RAW links so <img> works in HTML
     img_4cln = "https://raw.githubusercontent.com/enesemretas/hingeprot_fortran/main/assets/4cln.jpg"
     img_2bbm = "https://raw.githubusercontent.com/enesemretas/hingeprot_fortran/main/assets/2bbm.jpg"
+    img_example = "https://raw.githubusercontent.com/enesemretas/hingeprot_fortran/main/assets/example.jpg"
+
 
     # Reference links (open in new tab)
     ref1_url = "https://pubs.acs.org/doi/10.1021/bi00188a001"
@@ -2952,6 +2954,60 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
 
 
     about_page = W.HTML(about_html, layout=W.Layout(width="100%"))
+
+
+    help_html = f"""
+    <div class="hp-about">
+      <h2>Input</h2>
+    
+      <p><b>Protein Chain:</b> the user can enter a PDB code or upload his/her own PDB format file. If the input structure includes more than one chain, the user will be requested to select one of the chains in the next step. The server employs coarse grained residue model and thus only reads Ca atom coordinates from the PDB file, so the input file may include only Ca atoms. Missing residues in the input PDB file, are neglected in the calculations and the results are oriented according to available parts.</p>
+    
+      <p><b>E-mail address (optional):</b> since the calculations may take up to a few minutes for long proteins, it is recommended to enter e-mail address as an input. Once the calculations are finished, the link to the results will be sent to this e-mail. The results will be kept in the server for 2 months.The results page, if bookmarked, can be reached during this period.</p>
+    
+      <p>Currently HingeProt focuses on single chain of a protein. The largest number of residues allowed is 999. For a more detailed help on the theoretical background of the work see the About page.</p>
+    
+      <h2>Output</h2>
+    
+      <p>Results are given for the first and second slowest GNM modes of motion and their corresponding ANM modes of motion.</p>
+    
+      <p><b>Rigid Parts:</b> The server provides a table in which the rigid parts and the hinge residues calculated using the slowest first and second modes are given. Hinges dividing rigid segments and short flexible fragments on the rigid segments are displayed as a separate list after rigid parts. The two predicted conformations that describe the fluctuations from the average structure in the slowest first and second modes are presented and also available for download.</p>
+    
+      <p><b>Output files:</b> For each mode, the server provides a PDB format coordinate file. An arbitrary temperature factor is assigned to each rigid part so that when colored by temperature factor, each rigid part is shown in different color. The output files contain three models of the protein chain. The first model is the original chain (x-ray or NMR structure or a model structure), the second and the third models are predicted chain conformations obtained by adding the fluctuation vectors  (+/-) in the respective modes to the equilibrium position vectors (average structure).</p>
+    
+      <p><b>Visualization:</b> Jmol script is provided to view the results online. However the output files may be downloaded for later use. For visualization, any software that is capable of opening different models at the same time and coloring residues according to temperature factors is appropriate. Rasmol is suitable for the specific purpose.</p>
+    
+      <p>Below is given an example output of HingeProt. Each section may be summarized as follows</p>
+    
+      <!-- FIGURE: inserted right after the sentence above -->
+      <div style="margin:12px 0 18px 0; text-align:center;">
+        <img src="{img_example}" alt="HingeProt example output"
+             style="max-width:100%; width:min(980px, 100%); height:auto;
+                    border:1px solid #e5e7eb; border-radius:14px;"/>
+      </div>
+    
+      <h3>Protein/Chain</h3>
+      <p>The name of the pdb and chain user selected is displayed here.</p>
+    
+      <h3>Jmol Representation</h3>
+      <p>When the script first loads, original pdb of the structure is displayed in the window. User then may observe the rigid parts in different colors and the fluctuations at each mode by pressing "Slow Mode 1" and "Slow Mode 2" buttons. User may also display the residue numbers by pressing right mouse button on the window and choosing Labels/Atom number.</p>
+    
+      <h3>PDB File</h3>
+      <p>The PDB file displayed by Jmol representation may be downloaded here. Each rigid body is assigned a different (arbitrary) temperature factor so that when colored by temperature factor, each rigid unit is displayed in different colors. +/- fluctuations are given as separate models in PDB file. To be able visualize the motion all models have to be loaded.</p>
+    
+      <h3>Rigid Part No</h3>
+      <p>Index number of rigid part.</p>
+    
+      <h3>Residues</h3>
+      <p>Residue Numbers corresponding to each rigid part are given according to original PDB index.</p>
+    
+      <h3>Hinge Residues</h3>
+      <p>A list of hinge residues separating rigid segments is displayed.</p>
+    
+      <h3>Short Flexible Fragments</h3>
+      <p>Rigid segments with less than 15 residues are assigned to the nearest rigid segment and displayed as "short flexible fragments" in this list.</p>
+    </div>
+    """
+
    
     # ---------- References tab content (reads citations.txt next to ui.py) ----------
     base_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
@@ -2993,7 +3049,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
     """
 
 
-    help_page = W.HTML("<div></div>")
+    help_page = W.HTML(help_html, layout=W.Layout(width="100%"))
     refs_page = W.HTML(refs_html, layout=W.Layout(width="100%"))
 
     main_view = W.VBox([web_page], layout=W.Layout(width="100%"))
