@@ -1,4 +1,4 @@
-# HingeProt (Fortran) — Colab/Jupyter UI
+# HingeProt — Colab/Jupyter UI
 
 This repository provides a **Google Colab / Jupyter Notebook** user interface (UI) for running the classic **HingeProt** pipeline (rigid parts + hinge prediction) based on **Elastic Network Models (GNM/ANM)**.
 
