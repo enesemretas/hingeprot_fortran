@@ -1109,12 +1109,7 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         lines = [ln for ln in (pdb_text or "").splitlines() if ln.startswith(keep)]
         return ("\n".join(lines).rstrip() + "\n") if lines else (pdb_text or "")
     
-    def _viewer_bootstrap_doc(pdb_b64: str, ca_only: bool, w: int, h: int, iframe_id: str,
-                              init_selected: list[str] | None = None,
-                              init_cmap: dict[str, str] | None = None) -> str:
-        init_selected_js = json.dumps(init_selected or [])
-        init_cmap_js     = json.dumps(init_cmap or {})
-    
+    def _viewer_bootstrap_doc(pdb_b64: str, ca_only: bool, w: int, h: int, iframe_id: str) -> str:
         return f"""<!doctype html>
     <html>
     <head>
@@ -1127,8 +1122,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
       <script>
         const pdb = atob("{pdb_b64}");
         const CA_ONLY = {str(bool(ca_only)).lower()};
-        const INIT_SELECTED = {init_selected_js};
-        const INIT_CMAP = {init_cmap_js};
         let viewer = null;
     
         function applySelection(selected, cmap) {{
@@ -1160,14 +1153,11 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
         }}
     
         function init() {{
-          viewer = $3Dmol.createViewer("stage", {{ backgroundColor: "white" }});
+          viewer = $3Dmol.createViewer("stage", {{ backgroundColor: "white" }}); // <-- BURASI ÖNEMLİ
           viewer.addModel(pdb, "pdb");
-    
-          // 🔥 İlk açılışta seçimi uygula
-          applySelection(INIT_SELECTED, INIT_CMAP);
-    
-          // bazı ortamlarda render timing için 1 kez daha
-          setTimeout(() => applySelection(INIT_SELECTED, INIT_CMAP), 50);
+          applySelection([], {{}});
+          viewer.zoomTo();
+          viewer.render();
         }}
     
         window.addEventListener("message", (e) => {{
@@ -2097,6 +2087,35 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
             state["pdb_b64_view"] = base64.b64encode(pdb_view.encode("utf-8", errors="ignore")).decode("ascii")
             state["pdb_is_ca_only_view"] = _is_ca_only_pdb(pdb_view)
 
+            # ---- viewer iframe'i 1 kez kur ----
+            iframe_id = f"hp_main_if_{uuid.uuid4().hex}"
+            state["viewer_iframe_id"] = iframe_id
+
+            doc = _viewer_bootstrap_doc(
+                pdb_b64=state["pdb_b64_view"],
+                ca_only=state["pdb_is_ca_only_view"],
+                w=VIEW_W,
+                h=VIEW_H,
+                iframe_id=iframe_id,
+            )
+
+            # Tek iframe: id veriyoruz ki postMessage ile yakalayabilelim
+            b64 = base64.b64encode(doc.encode("utf-8")).decode("ascii")
+            srcdoc = (
+                "<!doctype html><html><head><meta charset='utf-8'></head>"
+                "<body style='margin:0;overflow:hidden;'>"
+                "<script>"
+                f"const html=atob('{b64}');"
+                "document.open();document.write(html);document.close();"
+                "</script>"
+                "</body></html>"
+            )
+
+            viewer_html.value = (
+                f"<iframe id='{iframe_id}' srcdoc=\"{srcdoc.replace('\"','&quot;')}\" "
+                f"sandbox='allow-scripts allow-same-origin' "
+                f"style='width:100%;height:100%;border:0;display:block;overflow:hidden;border-radius:12px;'></iframe>"
+            )
 
 
             state["pdb_filename"] = pdb_filename
@@ -2124,53 +2143,6 @@ def launch(runs_root: str = "/content/hingeprot_runs"):
                 all_chains.value = False
             finally:
                 state["_syncing"] = False
-
-
-
-            # ---- viewer iframe'i 1 kez kur ----
-            iframe_id = f"hp_main_if_{uuid.uuid4().hex}"
-            state["viewer_iframe_id"] = iframe_id
-            
-            # (A) doc'u ÖNCE üret (init_selected/init_cmap ile)
-            doc = _viewer_bootstrap_doc(
-                pdb_b64=state["pdb_b64_view"],
-                ca_only=state["pdb_is_ca_only_view"],
-                w=VIEW_W,
-                h=VIEW_H,
-                iframe_id=iframe_id,
-                init_selected=default_sel,          # ilk chain seçili gelecek
-                init_cmap=state["chain_colors"],    # renkler
-            )
-            
-            # (B) doc'u iframe srcdoc'a bas
-            b64 = base64.b64encode(doc.encode("utf-8")).decode("ascii")
-            srcdoc = (
-                "<!doctype html><html><head><meta charset='utf-8'></head>"
-                "<body style='margin:0;overflow:hidden;'>"
-                "<script>"
-                f"const html=atob('{b64}');"
-                "document.open();document.write(html);document.close();"
-                "</script>"
-                "</body></html>"
-            )
-            
-            viewer_html.value = (
-                f"<iframe id='{iframe_id}' srcdoc=\"{srcdoc.replace('\"','&quot;')}\" "
-                f"sandbox='allow-scripts allow-same-origin' "
-                f"style='width:100%;height:100%;border:0;display:block;overflow:hidden;border-radius:12px;'></iframe>"
-            )
-
-
-            doc = _viewer_bootstrap_doc(
-                pdb_b64=state["pdb_b64_view"],
-                ca_only=state["pdb_is_ca_only_view"],
-                w=VIEW_W,
-                h=VIEW_H,
-                iframe_id=iframe_id,
-                init_selected=default_sel,                 # ✅
-                init_cmap=state["chain_colors"],           # ✅                
-            )
-
 
             progress.value = 1
             cmap = state.get("chain_colors", {})
