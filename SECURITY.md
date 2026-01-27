@@ -10,7 +10,6 @@ Security fixes are applied to the **latest `main` branch**. Older tags/commits m
 | `main`         | :white_check_mark: |
 | Older tags     | :x:                |
 
-> If you are using this project in a production-like environment, we strongly recommend pinning dependencies and regularly updating to the latest commit on `main`.
 
 ---
 
